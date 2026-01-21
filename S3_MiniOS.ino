@@ -84,7 +84,7 @@ std::unique_ptr<Arduino_IIC_Touch> FT3168 = nullptr;
 
 SensorQMI8658 qmi;
 SensorPCF85063 rtc;
-XPowersPMU PMU;
+XPowersAXP2101 PMU;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SCREEN MANAGEMENT
@@ -105,6 +105,15 @@ unsigned long lastSecond = 0;
 unsigned long lastUI = 0;
 int hours = 12, minutes = 0, seconds = 0;
 bool rtcAvailable = false;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POWER MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+bool pmuAvailable = false;
+int batteryPercent = 0;
+bool isCharging = false;
+unsigned long lastBatteryCheck = 0;
+#define BATTERY_CHECK_INTERVAL 5000  // Check every 5 seconds
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STEP COUNTER
@@ -131,6 +140,13 @@ unsigned long lastFocusUpdate = 0;
 bool touchAvailable = false;
 unsigned long lastTouchTime = 0;
 #define TOUCH_DEBOUNCE 200  // Milliseconds
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POWER SAVING / DEEP SLEEP
+// ═══════════════════════════════════════════════════════════════════════════
+unsigned long lastActivity = 0;
+#define SLEEP_TIMEOUT 30000  // 30 seconds of inactivity before sleep
+bool sleepEnabled = true;  // Can be toggled
 
 // ═══════════════════════════════════════════════════════════════════════════
 // UI HELPER FUNCTIONS
@@ -228,9 +244,9 @@ void serviceClock() {
     // Try to read from RTC if available
     if (rtcAvailable && rtc.isRunning()) {
       RTC_DateTime datetime = rtc.getDateTime();
-      hours = datetime.hour;
-      minutes = datetime.minute;
-      seconds = datetime.second;
+      hours = datetime.getHour();
+      minutes = datetime.getMinute();
+      seconds = datetime.getSecond();
     } else {
       // Fallback to millis-based time
       seconds++;
@@ -248,6 +264,27 @@ void serviceClock() {
     }
     
     uiDirty = true;  // Trigger screen update
+  }
+}
+
+/**
+ * Update battery service - reads battery status
+ */
+void serviceBattery() {
+  if (!pmuAvailable) return;
+  
+  unsigned long now = millis();
+  
+  if (now - lastBatteryCheck >= BATTERY_CHECK_INTERVAL) {
+    lastBatteryCheck = now;
+    
+    // Read battery percentage
+    batteryPercent = PMU.getBatteryPercent();
+    
+    // Check charging status
+    isCharging = PMU.isCharging();
+    
+    uiDirty = true;
   }
 }
 
@@ -316,6 +353,31 @@ void serviceFocusTimer() {
  */
 void drawHomeScreen() {
   gfx->fillScreen(COL_BG);
+  
+  // --- Battery Status (Top Right) ---
+  if (pmuAvailable) {
+    gfx->setTextSize(2);
+    gfx->setTextColor(COL_TEXT);
+    
+    char battStr[16];
+    if (isCharging) {
+      sprintf(battStr, "CHG %d%%", batteryPercent);
+      gfx->setTextColor(COL_ACCENT);
+    } else {
+      sprintf(battStr, "%d%%", batteryPercent);
+      if (batteryPercent < 20) {
+        gfx->setTextColor(0xF800);  // Red for low battery
+      } else {
+        gfx->setTextColor(COL_STEPS);  // Green for good battery
+      }
+    }
+    
+    int16_t x1, y1;
+    uint16_t tw, th;
+    gfx->getTextBounds(battStr, 0, 0, &x1, &y1, &tw, &th);
+    gfx->setCursor(LCD_WIDTH - tw - 20, 15);
+    gfx->print(battStr);
+  }
   
   // --- Large Clock Display ---
   char timeStr[16];
@@ -573,6 +635,9 @@ void handleTouch() {
     
     unsigned long now = millis();
     
+    // Reset sleep timer on any touch
+    lastActivity = now;
+    
     // Debounce
     if (now - lastTouchTime < TOUCH_DEBOUNCE) {
       return;
@@ -581,13 +646,13 @@ void handleTouch() {
     
     // Read touch coordinates
     int32_t fingers = FT3168->IIC_Read_Device_Value(
-      FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_FINGER_NUMBER);
+      Arduino_IIC_Touch::TOUCH_FINGER_NUMBER);
     
     if (fingers > 0) {
       int32_t x = FT3168->IIC_Read_Device_Value(
-        FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X);
+        Arduino_IIC_Touch::TOUCH_COORDINATE_X);
       int32_t y = FT3168->IIC_Read_Device_Value(
-        FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y);
+        Arduino_IIC_Touch::TOUCH_COORDINATE_Y);
       
       // Route to appropriate handler
       switch (currentScreen) {
@@ -615,6 +680,49 @@ void Arduino_IIC_Touch_Interrupt(void) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// POWER MANAGEMENT - DEEP SLEEP
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Enter deep sleep mode and configure wake on touch
+ */
+void enterDeepSleep() {
+  Serial.println("Entering deep sleep...");
+  
+  // Turn off display
+  gfx->displayOff();
+  
+  // Configure touch interrupt as wakeup source
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)TOUCH_INT, LOW);
+  
+  // Optional: Also wake on boot button
+  esp_sleep_enable_ext1_wakeup(1ULL << BUTTON_BOOT, ESP_EXT1_WAKEUP_ANY_HIGH);
+  
+  // Enter deep sleep
+  esp_deep_sleep_start();
+}
+
+/**
+ * Check for inactivity and sleep if needed
+ */
+void checkSleepTimeout() {
+  if (!sleepEnabled) return;
+  
+  unsigned long now = millis();
+  
+  // Don't sleep if focus timer is running
+  if (focusRunning) {
+    lastActivity = now;
+    return;
+  }
+  
+  // Check if timeout exceeded
+  if (now - lastActivity >= SLEEP_TIMEOUT) {
+    enterDeepSleep();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SETUP - ONE-TIME INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════
 void setup() {
@@ -623,6 +731,21 @@ void setup() {
   delay(1000);
   Serial.println("═══════════════════════════════════════");
   Serial.println("S3 MiniOS v0.1 - Starting...");
+  
+  // Check wake reason
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+  switch(wakeup_reason) {
+    case ESP_SLEEP_WAKEUP_EXT0:
+      Serial.println("Woke up from touch interrupt");
+      break;
+    case ESP_SLEEP_WAKEUP_EXT1:
+      Serial.println("Woke up from button press");
+      break;
+    default:
+      Serial.println("Cold boot / reset");
+      break;
+  }
+  
   Serial.println("═══════════════════════════════════════");
   
   // ─────────────────────────────────────
@@ -647,7 +770,7 @@ void setup() {
   gfx->print("Initializing...");
   
   // Set display brightness
-  gfx->Display_Brightness(200);
+  gfx->setBrightness(200);
   Serial.println("Display OK");
   
   // ─────────────────────────────────────
@@ -710,22 +833,16 @@ void setup() {
   if (rtc.begin(Wire, PCF85063_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
     if (!rtc.isRunning()) {
       // Set initial time if RTC was not running
-      RTC_DateTime datetime;
-      datetime.year = 2025;
-      datetime.month = 1;
-      datetime.day = 21;
-      datetime.hour = 12;
-      datetime.minute = 0;
-      datetime.second = 0;
+      RTC_DateTime datetime(2025, 1, 21, 12, 0, 0);
       rtc.setDateTime(datetime);
       rtc.enableCLK();
     }
     
     // Read initial time
     RTC_DateTime datetime = rtc.getDateTime();
-    hours = datetime.hour;
-    minutes = datetime.minute;
-    seconds = datetime.second;
+    hours = datetime.getHour();
+    minutes = datetime.getMinute();
+    seconds = datetime.getSecond();
     
     rtcAvailable = true;
     Serial.println("RTC OK");
@@ -734,12 +851,23 @@ void setup() {
   }
   
   // ─────────────────────────────────────
-  // POWER MANAGEMENT (OPTIONAL)
+  // POWER MANAGEMENT (AXP2101)
   // ─────────────────────────────────────
   Serial.println("Initializing power management...");
   
   if (PMU.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
+    // Enable power rails for peripherals
+    PMU.enableALDO1();  // Display power
+    PMU.enableALDO2();  // Touch/sensors
+    PMU.enableBLDO1();  // Additional peripherals
+    
+    // Read initial battery status
+    batteryPercent = PMU.getBatteryPercent();
+    isCharging = PMU.isCharging();
+    
+    pmuAvailable = true;
     Serial.println("PMU OK");
+    Serial.printf("  Battery: %d%% %s\n", batteryPercent, isCharging ? "(Charging)" : "");
   } else {
     Serial.println("WARNING: PMU not found");
   }
@@ -754,9 +882,13 @@ void setup() {
   Serial.printf("  Touch: %s\n", touchAvailable ? "OK" : "NOT FOUND");
   Serial.printf("  Accelerometer: %s\n", qmiAvailable ? "OK" : "NOT FOUND");
   Serial.printf("  RTC: %s\n", rtcAvailable ? "OK" : "NOT FOUND");
+  Serial.printf("  PMU: %s\n", pmuAvailable ? "OK" : "NOT FOUND");
   Serial.println("═══════════════════════════════════════");
   
   delay(2000);
+  
+  // Initialize activity timer
+  lastActivity = millis();
   
   // Draw initial screen
   drawHomeScreen();
@@ -769,6 +901,7 @@ void setup() {
 void loop() {
   // Run background services
   serviceClock();
+  serviceBattery();
   serviceSteps();
   serviceFocusTimer();
   
@@ -794,6 +927,9 @@ void loop() {
     
     uiDirty = false;
   }
+  
+  // Check for sleep timeout
+  checkSleepTimeout();
   
   // Small delay to prevent CPU hogging
   delay(10);
