@@ -58,8 +58,9 @@
 #define IIC_SCL       16
 
 // Touch Controller (FT3168)
-#define TOUCH_INT     17
-#define TOUCH_RST     18
+#define TOUCH_INT           17
+#define TOUCH_RST           18
+#define FT3168_DEVICE_ADDRESS  0x38
 
 // Buttons
 #define BUTTON_BOOT   0
@@ -82,7 +83,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
 Arduino_DataBus *bus = nullptr;
 Arduino_GFX *gfx = nullptr;
-Arduino_IIC_Touch *FT3168 = nullptr;
+
+// I2C Bus and Touch Controller
+std::shared_ptr<Arduino_IIC_DriveBus> IIC_Bus = nullptr;
+std::unique_ptr<Arduino_IIC> FT3168 = nullptr;
 
 SensorQMI8658 qmi;
 SensorPCF85063 rtc;
@@ -635,9 +639,9 @@ void handleTouchFocus(int32_t x, int32_t y) {
 void handleTouch() {
   if (!touchAvailable || !FT3168) return;
 
-  // Check if touch interrupt triggered
-  if (touchInterruptFlag) {
-    touchInterruptFlag = false;
+  // Check if touch interrupt triggered using library's flag
+  if (FT3168->IIC_Interrupt_Flag) {
+    FT3168->IIC_Interrupt_Flag = false;
 
     unsigned long now = millis();
 
@@ -652,8 +656,8 @@ void handleTouch() {
 
     // FIX: Use the correct Arduino_DriveBus touch reading methods
     // Read touch coordinates using the proper API
-    int32_t x = FT3168->getPoint(0).x;
-    int32_t y = FT3168->getPoint(0).y;
+    int32_t x = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X);
+    int32_t y = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y);
 
     // Check if valid touch coordinates (filter out invalid reads)
     if (x > 0 && y > 0) {
@@ -677,7 +681,7 @@ void handleTouch() {
 // TOUCH INTERRUPT CALLBACK
 // ═══════════════════════════════════════════════════════════════════════════
 void Arduino_IIC_Touch_Interrupt(void) {
-  touchInterruptFlag = true;
+  FT3168->IIC_Interrupt_Flag = true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -794,12 +798,16 @@ void setup() {
   digitalWrite(TOUCH_RST, HIGH);
   delay(50);
 
-  // FIX: Use the correct constructor for Arduino_IIC_Touch
-  // The Arduino_DriveBus library constructor takes: TwoWire*, address, int_pin
-  FT3168 = new Arduino_IIC_Touch(&Wire, FT3168_DEVICE_ADDRESS, TOUCH_INT);
+  // FIX: Use the correct constructor for Arduino_FT3x68
+  // Create IIC Bus and Touch Controller using Arduino_DriveBus library
+  IIC_Bus = std::make_shared<Arduino_HWIIC>(IIC_SDA, IIC_SCL, &Wire);
+  FT3168 = std::unique_ptr<Arduino_IIC>(new Arduino_FT3x68(IIC_Bus, FT3168_DEVICE_ADDRESS,
+                                                            DRIVEBUS_DEFAULT_VALUE, TOUCH_INT, Arduino_IIC_Touch_Interrupt));
 
   if (FT3168->begin()) {
-    attachInterrupt(TOUCH_INT, Arduino_IIC_Touch_Interrupt, FALLING);
+    // Set touch controller to monitor mode for continuous operation
+    FT3168->IIC_Write_Device_State(FT3168->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
+                                     FT3168->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_MONITOR);
     touchAvailable = true;
     Serial.println("Touch OK");
   } else {
