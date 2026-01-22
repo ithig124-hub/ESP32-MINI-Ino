@@ -248,7 +248,7 @@ void serviceClock() {
     
     // Try to read from RTC if available
     if (rtcAvailable && rtc.isRunning()) {
-      RTC_Date datetime = rtc.getDateTime();
+      RTC_DateTime datetime = rtc.getDateTime();
       hours = datetime.hour;
       minutes = datetime.minute;
       seconds = datetime.second;
@@ -649,26 +649,23 @@ void handleTouch() {
     }
     lastTouchTime = now;
     
-    // Read touch data
-    if (FT3168->isPressed()) {
-      uint8_t fingers = FT3168->getPointNum();
-      
-      if (fingers > 0) {
-        int32_t x = FT3168->getPoint(0).x;
-        int32_t y = FT3168->getPoint(0).y;
-        
-        // Route to appropriate handler
-        switch (currentScreen) {
-          case SCREEN_HOME:
-            handleTouchHome(x, y);
-            break;
-          case SCREEN_STEPS:
-            handleTouchSteps(x, y);
-            break;
-          case SCREEN_FOCUS:
-            handleTouchFocus(x, y);
-            break;
-        }
+    // Read touch data using IIC_Read_Device_Value
+    int32_t x = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X);
+    int32_t y = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y);
+    
+    // Check if valid touch coordinates (filter out invalid reads)
+    if (x > 0 && y > 0) {
+      // Route to appropriate handler
+      switch (currentScreen) {
+        case SCREEN_HOME:
+          handleTouchHome(x, y);
+          break;
+        case SCREEN_STEPS:
+          handleTouchSteps(x, y);
+          break;
+        case SCREEN_FOCUS:
+          handleTouchFocus(x, y);
+          break;
       }
     }
   }
@@ -796,10 +793,9 @@ void setup() {
   delay(50);
   
   FT3168 = new Arduino_IIC_Touch(
-    Wire, 0x38, TOUCH_INT, TOUCH_RST, 
-    LCD_WIDTH, LCD_HEIGHT);
+    Wire, 0x38, TOUCH_INT, TOUCH_RST);
   
-  if (FT3168->begin()) {
+  if (FT3168->IIC_Initialization()) {
     attachInterrupt(TOUCH_INT, Arduino_IIC_Touch_Interrupt, FALLING);
     touchAvailable = true;
     Serial.println("Touch OK");
@@ -814,10 +810,8 @@ void setup() {
   
   if (qmi.begin(Wire, 0x6B, IIC_SDA, IIC_SCL)) {  // QMI8658 I2C address
     qmi.configAccelerometer(
-      SensorQMI8658::AccRange::ACC_RANGE_4G,
-      SensorQMI8658::AccOdr::ACC_ODR_1000Hz,
-      SensorQMI8658::LpfMode::LPF_MODE_0,
-      true);
+      SensorQMI8658::ACC_RANGE_4G,
+      SensorQMI8658::LPF_MODE_0);
     
     qmi.enableAccelerometer();
     qmiAvailable = true;
@@ -831,15 +825,14 @@ void setup() {
   // ─────────────────────────────────────
   Serial.println("Initializing RTC...");
   
-  if (rtc.begin(Wire, 0x51, IIC_SDA, IIC_SCL)) {  // PCF85063 I2C address
+  if (rtc.begin(Wire, IIC_SDA, IIC_SCL)) {  // PCF85063 initialization
     if (!rtc.isRunning()) {
       // Set initial time if RTC was not running
       rtc.setDateTime(2025, 1, 21, 12, 0, 0);
-      rtc.enableCLK();
     }
     
     // Read initial time
-    RTC_Date datetime = rtc.getDateTime();
+    RTC_DateTime datetime = rtc.getDateTime();
     hours = datetime.hour;
     minutes = datetime.minute;
     seconds = datetime.second;
