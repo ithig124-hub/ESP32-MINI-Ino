@@ -33,8 +33,11 @@
 #include <SPI.h>
 #include "Arduino_GFX_Library.h"
 #include "Arduino_DriveBus_Library.h"
-#include "SensorLib.h"
 #include "XPowersLib.h"
+
+// SensorLib - specific sensor headers
+#include "SensorQMI8658.hpp"
+#include "SensorPCF85063.hpp"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PIN DEFINITIONS - Waveshare ESP32-S3-Touch-AMOLED-1.8
@@ -79,12 +82,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
 Arduino_DataBus *bus = nullptr;
 Arduino_GFX *gfx = nullptr;
-std::shared_ptr<Arduino_IIC_DriveBus> IIC_Bus = nullptr;
-std::unique_ptr<Arduino_IIC_Touch> FT3168 = nullptr;
+Arduino_IIC_Touch *FT3168 = nullptr;
 
 SensorQMI8658 qmi;
 SensorPCF85063 rtc;
 XPowersAXP2101 PMU;
+
+// Touch interrupt flag
+volatile bool touchInterruptFlag = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SCREEN MANAGEMENT
@@ -243,10 +248,10 @@ void serviceClock() {
     
     // Try to read from RTC if available
     if (rtcAvailable && rtc.isRunning()) {
-      RTC_DateTime datetime = rtc.getDateTime();
-      hours = datetime.getHour();
-      minutes = datetime.getMinute();
-      seconds = datetime.getSecond();
+      RTC_Date datetime = rtc.getDateTime();
+      hours = datetime.hour;
+      minutes = datetime.minute;
+      seconds = datetime.second;
     } else {
       // Fallback to millis-based time
       seconds++;
@@ -630,8 +635,8 @@ void handleTouch() {
   if (!touchAvailable || !FT3168) return;
   
   // Check if touch interrupt triggered
-  if (FT3168->IIC_Interrupt_Flag) {
-    FT3168->IIC_Interrupt_Flag = false;
+  if (touchInterruptFlag) {
+    touchInterruptFlag = false;
     
     unsigned long now = millis();
     
@@ -644,27 +649,26 @@ void handleTouch() {
     }
     lastTouchTime = now;
     
-    // Read touch coordinates
-    int32_t fingers = FT3168->IIC_Read_Device_Value(
-      Arduino_IIC_Touch::TOUCH_FINGER_NUMBER);
-    
-    if (fingers > 0) {
-      int32_t x = FT3168->IIC_Read_Device_Value(
-        Arduino_IIC_Touch::TOUCH_COORDINATE_X);
-      int32_t y = FT3168->IIC_Read_Device_Value(
-        Arduino_IIC_Touch::TOUCH_COORDINATE_Y);
+    // Read touch data
+    if (FT3168->isPressed()) {
+      uint8_t fingers = FT3168->getPointNum();
       
-      // Route to appropriate handler
-      switch (currentScreen) {
-        case SCREEN_HOME:
-          handleTouchHome(x, y);
-          break;
-        case SCREEN_STEPS:
-          handleTouchSteps(x, y);
-          break;
-        case SCREEN_FOCUS:
-          handleTouchFocus(x, y);
-          break;
+      if (fingers > 0) {
+        int32_t x = FT3168->getPoint(0).x;
+        int32_t y = FT3168->getPoint(0).y;
+        
+        // Route to appropriate handler
+        switch (currentScreen) {
+          case SCREEN_HOME:
+            handleTouchHome(x, y);
+            break;
+          case SCREEN_STEPS:
+            handleTouchSteps(x, y);
+            break;
+          case SCREEN_FOCUS:
+            handleTouchFocus(x, y);
+            break;
+        }
       }
     }
   }
@@ -674,9 +678,7 @@ void handleTouch() {
 // TOUCH INTERRUPT CALLBACK
 // ═══════════════════════════════════════════════════════════════════════════
 void Arduino_IIC_Touch_Interrupt(void) {
-  if (FT3168) {
-    FT3168->IIC_Interrupt_Flag = true;
-  }
+  touchInterruptFlag = true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -769,8 +771,8 @@ void setup() {
   gfx->setCursor(80, 200);
   gfx->print("Initializing...");
   
-  // Set display brightness
-  gfx->setBrightness(200);
+  // Note: setBrightness() not available in current Arduino_GFX version
+  // Use hardware-specific brightness control if needed
   Serial.println("Display OK");
   
   // ─────────────────────────────────────
@@ -779,8 +781,6 @@ void setup() {
   Serial.println("Initializing I2C bus...");
   Wire.begin(IIC_SDA, IIC_SCL);
   Wire.setClock(400000);  // 400kHz
-  
-  IIC_Bus = std::make_shared<Arduino_IIC_DriveBus>(Wire, IIC_SDA, IIC_SCL);
   Serial.println("I2C OK");
   
   // ─────────────────────────────────────
@@ -795,8 +795,9 @@ void setup() {
   digitalWrite(TOUCH_RST, HIGH);
   delay(50);
   
-  FT3168 = std::make_unique<Arduino_IIC_Touch>(IIC_Bus, TOUCH_RST, TOUCH_INT,
-    Arduino_IIC_Touch::Device_FT3168, 0x38);
+  FT3168 = new Arduino_IIC_Touch(
+    Wire, 0x38, TOUCH_INT, TOUCH_RST, 
+    LCD_WIDTH, LCD_HEIGHT);
   
   if (FT3168->begin()) {
     attachInterrupt(TOUCH_INT, Arduino_IIC_Touch_Interrupt, FALLING);
@@ -811,11 +812,11 @@ void setup() {
   // ─────────────────────────────────────
   Serial.println("Initializing accelerometer...");
   
-  if (qmi.begin(Wire, QMI8658_L_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
+  if (qmi.begin(Wire, 0x6B, IIC_SDA, IIC_SCL)) {  // QMI8658 I2C address
     qmi.configAccelerometer(
-      SensorQMI8658::ACC_RANGE_4G,
-      SensorQMI8658::ACC_ODR_1000Hz,
-      SensorQMI8658::LPF_MODE_0,
+      SensorQMI8658::AccRange::ACC_RANGE_4G,
+      SensorQMI8658::AccOdr::ACC_ODR_1000Hz,
+      SensorQMI8658::LpfMode::LPF_MODE_0,
       true);
     
     qmi.enableAccelerometer();
@@ -830,19 +831,18 @@ void setup() {
   // ─────────────────────────────────────
   Serial.println("Initializing RTC...");
   
-  if (rtc.begin(Wire, PCF85063_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
+  if (rtc.begin(Wire, 0x51, IIC_SDA, IIC_SCL)) {  // PCF85063 I2C address
     if (!rtc.isRunning()) {
       // Set initial time if RTC was not running
-      RTC_DateTime datetime(2025, 1, 21, 12, 0, 0);
-      rtc.setDateTime(datetime);
+      rtc.setDateTime(2025, 1, 21, 12, 0, 0);
       rtc.enableCLK();
     }
     
     // Read initial time
-    RTC_DateTime datetime = rtc.getDateTime();
-    hours = datetime.getHour();
-    minutes = datetime.getMinute();
-    seconds = datetime.getSecond();
+    RTC_Date datetime = rtc.getDateTime();
+    hours = datetime.hour;
+    minutes = datetime.minute;
+    seconds = datetime.second;
     
     rtcAvailable = true;
     Serial.println("RTC OK");
