@@ -1,9 +1,13 @@
 /**
  * ESP32-S3-Touch-AMOLED-1.8 Pin Configuration
  * Based on official Waveshare pinout
+ * Compatible with pocketClock and Waveshare examples
  */
 
 #pragma once
+
+// Power chip define (required for XPowersLib)
+#define XPOWERS_CHIP_AXP2101
 
 // ============================================
 // DISPLAY (QSPI - SH8601 AMOLED)
@@ -61,15 +65,27 @@
 // AUDIO CODEC (ES8311)
 // ============================================
 #define ES8311_ADDR     0x18
+
+// I2S Pins (ES8311 Audio)
 #define I2S_MCK_IO      16
 #define I2S_BCK_IO      9
 #define I2S_WS_IO       45
 #define I2S_DO_IO       10
 #define I2S_DI_IO       8
+
+// Alternative I2S naming (for pocketClock compatibility)
+#define MCLKPIN         16
+#define BCLKPIN         9
+#define WSPIN           45
+#define DOPIN           10
+#define DIPIN           8
+
+// Power Amplifier
 #define PA_PIN          46
+#define PA              46
 
 // ============================================
-// SD CARD (SDMMC)
+// SD CARD (SDMMC - 1-bit mode)
 // ============================================
 #define SDMMC_CLK       2
 #define SDMMC_CMD       1

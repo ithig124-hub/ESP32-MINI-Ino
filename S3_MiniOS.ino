@@ -1,2199 +1,1987 @@
 /**
- * ═══════════════════════════════════════════════════════════════════════════
- *  S3 MiniOS - ESP32-S3-Touch-AMOLED-1.8 Firmware
- *  ADVANCED CARD-BASED OPERATING SYSTEM v2.0
- * ═══════════════════════════════════════════════════════════════════════════
+ * ESP32-S3 Touch AMOLED 1.8" Mini OS
+ * Professional LVGL-based firmware with swipe navigation
  * 
- *  Card-based smartwatch OS with infinite swipe navigation
- *  Multiple themes inspired by modern smartwatch UIs
- * 
- *  Hardware: Waveshare ESP32-S3-Touch-AMOLED-1.8
- *    • Display: SH8601 QSPI AMOLED 368x448
- *    • Touch: FT3168
- *    • IMU: QMI8658
- *    • RTC: PCF85063
- *    • PMU: AXP2101
- * 
- *  Required Library: GFX Library for Arduino (by moononournation)
- * 
- *  NAVIGATION:
- *    - Swipe LEFT/RIGHT: Navigate between main category cards (infinite loop)
- *    - Swipe DOWN from main card: Enter category stack
- *    - In stack: LEFT/RIGHT navigates sub-cards, UP returns to main card
- *    - Long press: Theme selector
- * 
- * ═══════════════════════════════════════════════════════════════════════════
+ * 23 Total Cards:
+ * Clock, Activity Rings, Steps, Workout, Sleep, Streak, Daily Goal,
+ * Music, Weather, Quote, Yes/No Spinner, Timer, Dino Game, Volume,
+ * World Clock, Calendar, Notes, Torch, Battery, Gallery, Stocks,
+ * Themes, System, Compass
  */
 
+// ============================================
+// INCLUDES
+// ============================================
+#include <lvgl.h>
 #include <Wire.h>
+#include <WiFi.h>
 #include <Arduino.h>
+#include "pin_config.h"
 #include "Arduino_GFX_Library.h"
-#include <Preferences.h>
+#include "Arduino_DriveBus_Library.h"
+#include <Adafruit_XCA9554.h>
+#include "SensorQMI8658.hpp"
+#include "SensorPCF85063.hpp"
+#include "XPowersLib.h"
+#include <FS.h>
+#include <SD_MMC.h>
+#include "HWCDC.h"
 #include <math.h>
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  HARDWARE PINS
-// ═══════════════════════════════════════════════════════════════════════════
+// ============================================
+// WIFI CONFIGURATION
+// ============================================
+const char* WIFI_SSID = "Optus_9D2E3D";
+const char* WIFI_PASSWORD = "snucktemptGLeQU";
 
-#define LCD_SDIO0       4
-#define LCD_SDIO1       5
-#define LCD_SDIO2       6
-#define LCD_SDIO3       7
-#define LCD_SCLK        11
-#define LCD_CS          12
-#define LCD_WIDTH       368
-#define LCD_HEIGHT      448
+// ============================================
+// LVGL CONFIGURATION
+// ============================================
+#define EXAMPLE_LVGL_TICK_PERIOD_MS 2
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t *buf1 = NULL;
+static lv_color_t *buf2 = NULL;
 
-#define IIC_SDA         15
-#define IIC_SCL         14
-#define TP_INT          21
+// ============================================
+// HARDWARE OBJECTS
+// ============================================
+HWCDC USBSerial;
+Adafruit_XCA9554 expander;
+SensorQMI8658 qmi;
+SensorPCF85063 rtc;
+XPowersPMU power;
 
-#define XCA9554_ADDR    0x20
-#define AXP2101_ADDR    0x34
-#define FT3168_ADDR     0x38
-#define PCF85063_ADDR   0x51
-#define QMI8658_ADDR    0x6B
+IMUdata acc;
+IMUdata gyr;
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  THEME SYSTEM - Multiple Themes
-// ═══════════════════════════════════════════════════════════════════════════
-
-enum ThemeType {
-    THEME_AMOLED = 0,
-    THEME_RED_BLACK = 1,
-    THEME_PURPLE_GLASS = 2,
-    THEME_FITNESS = 3,
-    THEME_STREAK = 4,
-    THEME_COUNT = 5
-};
-
-struct Theme {
-    const char* name;
-    uint16_t bg;
-    uint16_t card;
-    uint16_t cardLight;
-    uint16_t text;
-    uint16_t textDim;
-    uint16_t textDimmer;
-    uint16_t accent1;
-    uint16_t accent2;
-    uint16_t accent3;
-    uint16_t accent4;
-    uint16_t success;
-    uint16_t warning;
-    uint16_t danger;
-};
-
-// Color conversion helper: RGB888 to RGB565
-#define RGB565(r, g, b) ((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
-
-Theme themes[THEME_COUNT] = {
-    // AMOLED Dark - Cyan accents
-    {
-        "AMOLED Dark",
-        0x0000,                     // bg - pure black
-        RGB565(26, 26, 26),         // card
-        RGB565(45, 45, 45),         // cardLight
-        0xFFFF,                     // text - white
-        RGB565(136, 136, 136),      // textDim
-        RGB565(85, 85, 85),         // textDimmer
-        0x07FF,                     // accent1 - cyan
-        0xF81F,                     // accent2 - magenta
-        0x07E0,                     // accent3 - green
-        0xFD20,                     // accent4 - orange
-        0x07E0,                     // success - green
-        0xFD20,                     // warning - orange
-        0xF800                      // danger - red
-    },
-    // Red & Black - Minimal
-    {
-        "Red Black",
-        RGB565(10, 10, 10),         // bg
-        RGB565(26, 26, 26),         // card
-        RGB565(42, 42, 42),         // cardLight
-        0xFFFF,                     // text
-        RGB565(170, 170, 170),      // textDim
-        RGB565(102, 102, 102),      // textDimmer
-        RGB565(255, 0, 51),         // accent1 - red
-        RGB565(255, 51, 102),       // accent2 - pink-red
-        0xFFFF,                     // accent3 - white
-        RGB565(255, 0, 51),         // accent4 - red
-        RGB565(0, 255, 102),        // success
-        0xFD20,                     // warning
-        RGB565(255, 0, 51)          // danger
-    },
-    // Purple Glass - Glassmorphism
-    {
-        "Purple Glass",
-        RGB565(26, 10, 46),         // bg - deep purple
-        RGB565(40, 20, 60),         // card
-        RGB565(60, 30, 80),         // cardLight
-        0xFFFF,                     // text
-        RGB565(196, 181, 253),      // textDim - lavender
-        RGB565(139, 92, 246),       // textDimmer - purple
-        RGB565(192, 132, 252),      // accent1 - light purple
-        RGB565(34, 211, 238),       // accent2 - cyan
-        RGB565(167, 139, 250),      // accent3 - violet
-        RGB565(244, 114, 182),      // accent4 - pink
-        RGB565(52, 211, 153),       // success
-        RGB565(251, 191, 36),       // warning
-        RGB565(248, 113, 113)       // danger
-    },
-    // Fitness - Bright Orange
-    {
-        "Fitness",
-        RGB565(245, 245, 245),      // bg - light gray
-        0xFFFF,                     // card - white
-        RGB565(240, 240, 240),      // cardLight
-        RGB565(26, 26, 26),         // text - dark
-        RGB565(102, 102, 102),      // textDim
-        RGB565(153, 153, 153),      // textDimmer
-        RGB565(255, 107, 53),       // accent1 - orange
-        RGB565(124, 58, 237),       // accent2 - purple
-        RGB565(6, 182, 212),        // accent3 - teal
-        RGB565(16, 185, 129),       // accent4 - green
-        RGB565(16, 185, 129),       // success
-        RGB565(245, 158, 11),       // warning
-        RGB565(239, 68, 68)         // danger
-    },
-    // Streak Fire - Dark with fire accents
-    {
-        "Streak Fire",
-        RGB565(15, 15, 15),         // bg
-        RGB565(26, 26, 26),         // card
-        RGB565(38, 38, 38),         // cardLight
-        0xFFFF,                     // text
-        RGB565(156, 163, 175),      // textDim
-        RGB565(75, 85, 99),         // textDimmer
-        RGB565(255, 107, 53),       // accent1 - orange fire
-        RGB565(59, 130, 246),       // accent2 - blue
-        RGB565(16, 185, 129),       // accent3 - green
-        RGB565(245, 158, 11),       // accent4 - yellow
-        RGB565(16, 185, 129),       // success
-        RGB565(245, 158, 11),       // warning
-        RGB565(239, 68, 68)         // danger
-    }
-};
-
-ThemeType currentTheme = THEME_AMOLED;
-Theme* theme = &themes[THEME_AMOLED];
-
-#define MARGIN          12
-#define CARD_RADIUS     16
-#define BTN_RADIUS      12
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  DISPLAY SETUP
-// ═══════════════════════════════════════════════════════════════════════════
-
+// Display & Touch
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
-    LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
+  LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
 
 Arduino_SH8601 *gfx = new Arduino_SH8601(
-    bus, GFX_NOT_DEFINED, 0, LCD_WIDTH, LCD_HEIGHT);
+  bus, GFX_NOT_DEFINED, 0, LCD_WIDTH, LCD_HEIGHT);
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  NAVIGATION SYSTEM - Extended Categories
-// ═══════════════════════════════════════════════════════════════════════════
+std::shared_ptr<Arduino_IIC_DriveBus> IIC_Bus =
+  std::make_shared<Arduino_HWIIC>(IIC_SDA, IIC_SCL, &Wire);
 
-enum MainCard { 
-    CARD_CLOCK = 0,
-    CARD_STEPS = 1, 
-    CARD_MUSIC = 2,
-    CARD_WEATHER = 3,
-    CARD_CALENDAR = 4,
-    CARD_GAMES = 5,
-    CARD_STREAK = 6,
-    CARD_FINANCE = 7,
-    CARD_SYSTEM = 8,
-    CARD_TIMER = 9,
-    CARD_SETTINGS = 10,
-    MAIN_CARD_COUNT = 11
+void Arduino_IIC_Touch_Interrupt(void);
+std::unique_ptr<Arduino_IIC> FT3168(new Arduino_FT3x68(IIC_Bus, FT3168_DEVICE_ADDRESS,
+                                                       DRIVEBUS_DEFAULT_VALUE, TP_INT, Arduino_IIC_Touch_Interrupt));
+
+// ============================================
+// NAVIGATION & STATE
+// ============================================
+enum MainCard {
+  CARD_CLOCK = 0,
+  CARD_COMPASS,
+  CARD_ACTIVITY_RINGS,
+  CARD_STEPS,
+  CARD_WORKOUT,
+  CARD_SLEEP,
+  CARD_STREAK,
+  CARD_DAILY_GOAL,
+  CARD_MUSIC,
+  CARD_WEATHER,
+  CARD_QUOTE,
+  CARD_YESNO,
+  CARD_TIMER,
+  CARD_DINO,
+  CARD_VOLUME,
+  CARD_WORLD_CLOCK,
+  CARD_CALENDAR,
+  CARD_NOTES,
+  CARD_TORCH,
+  CARD_BATTERY,
+  CARD_GALLERY,
+  CARD_STOCKS,
+  CARD_THEMES,
+  CARD_SYSTEM,
+  MAIN_CARD_COUNT
 };
 
-const char* cardNames[] = {
-    "CLOCK", "STEPS", "MUSIC", "WEATHER", "CALENDAR",
-    "GAMES", "STREAK", "FINANCE", "SYSTEM", "TIMER", "SETTINGS"
-};
+int currentMainCard = CARD_CLOCK;
+int currentSubCard = 0;
 
-enum SubCard {
-    SUB_NONE = 0,
-    
-    // Clock sub-cards (1-9)
-    SUB_CLOCK_WORLD = 1,
-    SUB_CLOCK_ANALOG = 2,
-    SUB_CLOCK_DIGITAL = 3,
-    SUB_CLOCK_ALARM = 4,
-    
-    // Steps sub-cards (10-19)
-    SUB_STEPS_GRAPH = 10,
-    SUB_STEPS_DISTANCE = 11,
-    SUB_STEPS_CALORIES = 12,
-    SUB_STEPS_DEBUG = 13,
-    
-    // Music sub-cards (20-29)
-    SUB_MUSIC_PLAYLIST = 20,
-    SUB_MUSIC_CONTROLS = 21,
-    SUB_MUSIC_VISUALIZER = 22,
-    
-    // Weather sub-cards (30-39)
-    SUB_WEATHER_FORECAST = 30,
-    SUB_WEATHER_DETAILS = 31,
-    SUB_WEATHER_HOURLY = 32,
-    
-    // Calendar sub-cards (40-49)
-    SUB_CALENDAR_EVENTS = 40,
-    SUB_CALENDAR_MONTHLY = 41,
-    SUB_CALENDAR_AGENDA = 42,
-    
-    // Games sub-cards (50-59)
-    SUB_GAMES_YESNO = 50,
-    SUB_GAMES_CLICKER = 51,
-    SUB_GAMES_REACTION = 52,
-    SUB_GAMES_DINO = 53,
-    
-    // Streak sub-cards (60-69)
-    SUB_STREAK_DAILY = 60,
-    SUB_STREAK_WEEKLY = 61,
-    SUB_STREAK_HISTORY = 62,
-    
-    // Finance sub-cards (70-79)
-    SUB_FINANCE_BUDGET = 70,
-    SUB_FINANCE_CRYPTO = 71,
-    SUB_FINANCE_STOCKS = 72,
-    
-    // System sub-cards (80-89)
-    SUB_SYSTEM_STATS = 80,
-    SUB_SYSTEM_BATTERY = 81,
-    SUB_SYSTEM_STORAGE = 82,
-    SUB_SYSTEM_NETWORK = 83,
-    
-    // Timer sub-cards (90-99)
-    SUB_TIMER_STOPWATCH = 90,
-    SUB_TIMER_COUNTDOWN = 91,
-    SUB_TIMER_POMODORO = 92,
-    
-    // Settings sub-cards (100-109)
-    SUB_SETTINGS_THEME = 100,
-    SUB_SETTINGS_DISPLAY = 101,
-    SUB_SETTINGS_SOUND = 102,
-    SUB_SETTINGS_ABOUT = 103
-};
+// Sub-card counts per main card
+const int subCardCounts[] = {2, 1, 1, 1, 3, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1};
 
-MainCard currentMainCard = CARD_CLOCK;
-SubCard currentSubCard = SUB_NONE;
-int subCardIndex = 0;
-bool redrawNeeded = true;
-bool inThemeSelector = false;
+// ============================================
+// UI STATE VARIABLES
+// ============================================
+// Brightness & Volume
+int brightness = 200;
+int volumeLevel = 70;
+bool torchOn = false;
 
-// Sub-card counts per category
-const int subCardCounts[] = {4, 4, 3, 3, 3, 4, 3, 3, 4, 3, 4};
+// Step tracking
+uint32_t stepCount = 0;
+float totalDistance = 0.0;
+float totalCalories = 0.0;
+int dailyGoal = 10000;
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  GESTURE DETECTION
-// ═══════════════════════════════════════════════════════════════════════════
-
-enum GestureType { GESTURE_NONE, GESTURE_LEFT, GESTURE_RIGHT, GESTURE_UP, GESTURE_DOWN, GESTURE_TAP, GESTURE_LONG_PRESS };
-
-int16_t gestureStartX = -1, gestureStartY = -1;
-int16_t gestureEndX = -1, gestureEndY = -1;
-unsigned long gestureStartTime = 0;
-bool gestureInProgress = false;
-
-#define SWIPE_THRESHOLD 80
-#define SWIPE_TIMEOUT 500
-#define LONG_PRESS_TIME 800
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  GLOBAL STATE - Mock Data
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Clock
-uint8_t clockHour = 10, clockMinute = 30, clockSecond = 0;
-uint8_t lastSecond = 255;
-const char* daysOfWeek[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-const char* monthNames[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-uint8_t currentDay = 3; // Wednesday
-uint8_t currentDate = 24;
-uint8_t currentMonth = 1; // January
-uint16_t currentYear = 2026;
-
-// Steps
-uint32_t stepCount = 6054;
-uint32_t stepGoal = 10000;
-uint32_t stepHistory[7] = {4200, 5800, 6100, 7300, 5200, 6054, 3200};
-float caloriesBurned = 312.5;
-float distanceKm = 4.2;
-
-// Music
-bool musicPlaying = false;
-uint8_t musicProgress = 35;
-const char* musicTitle = "Goon Gumpas";
-const char* musicArtist = "Aphex Twin";
-uint16_t musicDuration = 122;
-uint16_t musicCurrent = 48;
-uint8_t musicVolume = 54;
-
-// Games
-uint8_t spotlightGame = 0;
-unsigned long lastGameRotate = 0;
-uint32_t clickerScore = 0;
-uint16_t reactionTime = 0;
-bool reactionWaiting = false;
-unsigned long reactionStartTime = 0;
-bool yesNoResult = false;
-bool yesNoShowing = false;
-uint32_t dinoScore = 0;
-bool dinoJumping = false;
-
-// Weather (mock data)
-int8_t weatherTemp = 19;
-const char* weatherCondition = "Sunny";
-uint8_t weatherHumidity = 65;
-uint16_t weatherWind = 12;
-int8_t forecast[5] = {18, 19, 18, 17, 20};
-const char* forecastDays[] = {"WED", "THU", "FRI", "SAT", "SUN"};
-
-// Calendar
-uint8_t calendarEvents = 3;
-const char* eventTitles[] = {"Team Meeting", "Lunch", "Code Review"};
-const char* eventTimes[] = {"10:00 AM", "12:30 PM", "3:00 PM"};
+// Activity Rings
+int moveProgress = 65;
+int exerciseProgress = 45;
+int standProgress = 80;
 
 // Streak
-uint16_t streakDays = 12;
-bool dailyGoalMet[7] = {true, true, true, false, false, false, false};
-uint8_t dailyProgress = 66;
+int currentStreak = 7;
 
-// Finance
-float accountBalance = 1980.04;
-float budgetGoal = 3000.0;
-float btcPrice = 43465.0;
-float ethPrice = 2450.0;
-float btcChange = 2.4;
-float ethChange = -1.2;
+// Sleep tracking
+bool sleepTrackingActive = false;
+unsigned long sleepStartTime = 0;
+unsigned long sleepEndTime = 0;
+int movementData[24] = {0};
+int movementIndex = 0;
+unsigned long lastMovementSample = 0;
 
-// System stats
-uint8_t cpuUsage = 45;
-uint32_t freeRAM = 234567;
-float temperature = 42.5;
-uint16_t fps = 60;
-uint32_t storageUsed = 2048;
-uint32_t storageTotal = 8192;
-
-// Battery
-uint16_t batteryVoltage = 4100;
-uint8_t batteryPercent = 85;
-
-// Timer
-uint32_t stopwatchMs = 0;
+// Stopwatch/Timer
 bool stopwatchRunning = false;
-uint32_t countdownSeconds = 300;
-bool countdownRunning = false;
-uint8_t pomodoroMinutes = 25;
-bool pomodoroRunning = false;
+unsigned long stopwatchStart = 0;
+unsigned long stopwatchElapsed = 0;
+bool timerRunning = false;
+unsigned long timerDuration = 300000;  // 5 minutes
+unsigned long timerStart = 0;
 
-// Timing
-unsigned long lastClockUpdate = 0;
-unsigned long lastStepUpdate = 0;
-unsigned long lastBatteryUpdate = 0;
-unsigned long lastStatsUpdate = 0;
-unsigned long lastMusicUpdate = 0;
-unsigned long lastStopwatchUpdate = 0;
+// Workout modes
+enum WorkoutMode { WORKOUT_NONE = 0, WORKOUT_BIKE, WORKOUT_RUN, WORKOUT_BASKETBALL };
+WorkoutMode currentWorkout = WORKOUT_NONE;
+unsigned long workoutStartTime = 0;
+uint32_t workoutSteps = 0;
 
-// Hardware flags
-bool hasIMU = false, hasRTC = false, hasPMU = false;
+// Games
+int clickerScore = 0;
+int dinoScore = 0;
+bool dinoJumping = false;
+int dinoY = 0;
+int obstacleX = LCD_WIDTH;
+bool dinoGameOver = false;
 
-// Preferences
-Preferences prefs;
+// Compass
+float compassHeading = 45.0;
+const char* sunriseTime = "05:39";
+const char* sunsetTime = "19:05";
 
-// Touch
-int16_t touchX = -1, touchY = -1;
-bool lastTouchState = false;
-unsigned long touchDebounce = 0;
+// World Clock
+const char* worldCities[] = {"New York", "London", "Tokyo", "Sydney"};
+const int worldOffsets[] = {-5, 0, 9, 11};
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  HARDWARE DRIVERS
-// ═══════════════════════════════════════════════════════════════════════════
+// Calendar
+int selectedDay = 8;
+int currentMonth = 12;
+int currentYear = 2024;
 
-class XCA9554 {
-public:
-    bool begin(uint8_t addr = XCA9554_ADDR) {
-        _addr = addr;
-        Wire.beginTransmission(_addr);
-        return Wire.endTransmission() == 0;
-    }
-    void pinMode(uint8_t pin, uint8_t mode) {
-        uint8_t c = readReg(0x03);
-        if (mode == OUTPUT) c &= ~(1 << pin); else c |= (1 << pin);
-        writeReg(0x03, c);
-    }
-    void digitalWrite(uint8_t pin, uint8_t val) {
-        uint8_t o = readReg(0x01);
-        if (val) o |= (1 << pin); else o &= ~(1 << pin);
-        writeReg(0x01, o);
-    }
-private:
-    uint8_t _addr;
-    void writeReg(uint8_t r, uint8_t v) { Wire.beginTransmission(_addr); Wire.write(r); Wire.write(v); Wire.endTransmission(); }
-    uint8_t readReg(uint8_t r) { Wire.beginTransmission(_addr); Wire.write(r); Wire.endTransmission(); Wire.requestFrom(_addr,(uint8_t)1); return Wire.read(); }
+// Quotes
+const char* quotes[] = {
+  "The only way to do great\nwork is to love what you do.",
+  "Innovation distinguishes\nbetween a leader and\na follower.",
+  "Stay hungry, stay foolish.",
+  "Your time is limited,\ndon't waste it living\nsomeone else's life.",
+  "The future belongs to\nthose who believe in\ntheir dreams."
+};
+int currentQuote = 0;
+
+// Notes
+char notes[5][64] = {"Note 1", "Note 2", "Note 3", "Note 4", "Note 5"};
+int currentNote = 0;
+
+// Themes
+int currentTheme = 0;
+
+// Mock data
+const char* stockSymbols[] = {"AAPL", "GOOGL", "MSFT", "AMZN"};
+float stockPrices[] = {178.50, 141.20, 378.90, 178.25};
+const char* cryptoSymbols[] = {"BTC", "ETH", "SOL", "ADA"};
+float cryptoPrices[] = {67432.50, 3521.80, 142.30, 0.58};
+
+// Music & Gallery
+int currentTrack = 0;
+bool musicPlaying = false;
+String musicFiles[20];
+int musicFileCount = 0;
+int currentPhoto = 0;
+String photoFiles[50];
+int photoFileCount = 0;
+
+// ============================================
+// TOUCH TRACKING
+// ============================================
+int32_t touchStartX = 0;
+int32_t touchStartY = 0;
+int32_t touchCurrentX = 0;
+int32_t touchCurrentY = 0;
+bool touchActive = false;
+unsigned long touchStartTime = 0;
+
+// ============================================
+// THEME COLORS
+// ============================================
+struct Theme {
+  lv_color_t bg;
+  lv_color_t card;
+  lv_color_t text;
+  lv_color_t accent;
+  lv_color_t secondary;
 };
 
-class FT3168 {
-public:
-    bool begin() { Wire.beginTransmission(FT3168_ADDR); return Wire.endTransmission() == 0; }
-    bool touched() { Wire.beginTransmission(FT3168_ADDR); Wire.write(0x02); Wire.endTransmission(); Wire.requestFrom(FT3168_ADDR,(uint8_t)1); return (Wire.read() & 0x0F) > 0; }
-    void getPoint(int16_t *x, int16_t *y) {
-        Wire.beginTransmission(FT3168_ADDR); Wire.write(0x03); Wire.endTransmission();
-        Wire.requestFrom(FT3168_ADDR,(uint8_t)4);
-        uint8_t d[4]; for(int i=0;i<4;i++) d[i]=Wire.read();
-        *x = ((d[0]&0x0F)<<8)|d[1]; *y = ((d[2]&0x0F)<<8)|d[3];
-    }
+Theme themes[] = {
+  // Dark theme (AMOLED)
+  {lv_color_hex(0x000000), lv_color_hex(0x1A1A1A), lv_color_hex(0xFFFFFF), lv_color_hex(0x00D4FF), lv_color_hex(0x666666)},
+  // Blue theme
+  {lv_color_hex(0x0A1929), lv_color_hex(0x132F4C), lv_color_hex(0xFFFFFF), lv_color_hex(0x5090D3), lv_color_hex(0x3D5A80)},
+  // Green theme
+  {lv_color_hex(0x0D1F0D), lv_color_hex(0x1A3A1A), lv_color_hex(0xFFFFFF), lv_color_hex(0x4CAF50), lv_color_hex(0x2E7D32)},
+  // Purple theme
+  {lv_color_hex(0x1A0A29), lv_color_hex(0x2D1B4E), lv_color_hex(0xFFFFFF), lv_color_hex(0xBB86FC), lv_color_hex(0x7C4DFF)}
 };
 
-class PCF85063 {
-public:
-    bool begin() { Wire.beginTransmission(PCF85063_ADDR); return Wire.endTransmission() == 0; }
-    void getTime(uint8_t *h, uint8_t *m, uint8_t *s) {
-        Wire.beginTransmission(PCF85063_ADDR); Wire.write(0x04); Wire.endTransmission();
-        Wire.requestFrom(PCF85063_ADDR,(uint8_t)3);
-        *s = bcd(Wire.read()&0x7F); *m = bcd(Wire.read()&0x7F); *h = bcd(Wire.read()&0x3F);
+// ============================================
+// FUNCTION PROTOTYPES
+// ============================================
+void navigateToCard(int mainCard, int subCard);
+void handleSwipe(int dx, int dy);
+void createNavigationDots();
+lv_obj_t* createCardContainer(const char* title);
+
+// Card creation functions
+void createClockCard();
+void createAnalogClockCard();
+void createCompassCard();
+void createActivityRingsCard();
+void createStepsCard();
+void createWorkoutCard();
+void createSleepCard();
+void createSleepGraphCard();
+void createStreakCard();
+void createDailyGoalCard();
+void createMusicCard();
+void createWeatherCard();
+void createQuoteCard();
+void createYesNoCard();
+void createTimerCard();
+void createDinoCard();
+void createVolumeCard();
+void createWorldClockCard();
+void createCalendarCard();
+void createNotesCard();
+void createTorchCard();
+void createBatteryCard();
+void createGalleryCard();
+void createStocksCard();
+void createCryptoCard();
+void createThemesCard();
+void createSystemCard();
+
+// ============================================
+// TOUCH INTERRUPT
+// ============================================
+void Arduino_IIC_Touch_Interrupt(void) {
+  FT3168->IIC_Interrupt_Flag = true;
+}
+
+// ============================================
+// DISPLAY FLUSH CALLBACK
+// ============================================
+void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+  uint32_t w = (area->x2 - area->x1 + 1);
+  uint32_t h = (area->y2 - area->y1 + 1);
+
+#if (LV_COLOR_16_SWAP != 0)
+  gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t *)&color_p->full, w, h);
+#else
+  gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)&color_p->full, w, h);
+#endif
+
+  lv_disp_flush_ready(disp);
+}
+
+// ============================================
+// LVGL TICK CALLBACK
+// ============================================
+void example_increase_lvgl_tick(void *arg) {
+  lv_tick_inc(EXAMPLE_LVGL_TICK_PERIOD_MS);
+}
+
+// ============================================
+// TOUCHPAD READ CALLBACK
+// ============================================
+void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
+  int32_t touchX = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X);
+  int32_t touchY = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y);
+
+  if (FT3168->IIC_Interrupt_Flag == true) {
+    FT3168->IIC_Interrupt_Flag = false;
+    data->state = LV_INDEV_STATE_PR;
+    data->point.x = touchX;
+    data->point.y = touchY;
+
+    if (!touchActive) {
+      touchActive = true;
+      touchStartX = touchX;
+      touchStartY = touchY;
+      touchStartTime = millis();
     }
-private:
-    uint8_t bcd(uint8_t b) { return ((b>>4)*10)+(b&0x0F); }
-};
-
-class AXP2101 {
-public:
-    bool begin() { Wire.beginTransmission(AXP2101_ADDR); return Wire.endTransmission() == 0; }
-    uint16_t getBattVoltage() { uint8_t h=readReg(0x34),l=readReg(0x35); return ((h&0x3F)<<8)|l; }
-    uint8_t getBattPercent() { return readReg(0xA4)&0x7F; }
-private:
-    uint8_t readReg(uint8_t r) { Wire.beginTransmission(AXP2101_ADDR); Wire.write(r); Wire.endTransmission(); Wire.requestFrom(AXP2101_ADDR,(uint8_t)1); return Wire.read(); }
-};
-
-class QMI8658 {
-public:
-    bool begin() {
-        Wire.beginTransmission(QMI8658_ADDR);
-        if (Wire.endTransmission() != 0) return false;
-        if (readReg(0x00) != 0x05) return false;
-        writeReg(0x60, 0xB0); delay(10);
-        writeReg(0x03, 0x02);
-        writeReg(0x08, 0x01);
-        return true;
+    touchCurrentX = touchX;
+    touchCurrentY = touchY;
+  } else {
+    data->state = LV_INDEV_STATE_REL;
+    
+    if (touchActive) {
+      touchActive = false;
+      int dx = touchCurrentX - touchStartX;
+      int dy = touchCurrentY - touchStartY;
+      unsigned long touchDuration = millis() - touchStartTime;
+      
+      if (touchDuration < 500 && (abs(dx) > 50 || abs(dy) > 50)) {
+        handleSwipe(dx, dy);
+      }
     }
-    void getAccel(float *x, float *y, float *z) {
-        Wire.beginTransmission(QMI8658_ADDR); Wire.write(0x35); Wire.endTransmission();
-        Wire.requestFrom(QMI8658_ADDR,(uint8_t)6);
-        uint8_t d[6]; for(int i=0;i<6;i++) d[i]=Wire.read();
-        *x = (int16_t)((d[1]<<8)|d[0]) * (8.0f/32768.0f);
-        *y = (int16_t)((d[3]<<8)|d[2]) * (8.0f/32768.0f);
-        *z = (int16_t)((d[5]<<8)|d[4]) * (8.0f/32768.0f);
+  }
+}
+
+// ============================================
+// SWIPE HANDLER
+// ============================================
+void handleSwipe(int dx, int dy) {
+  if (abs(dx) > abs(dy)) {
+    if (dx > 50) {
+      currentMainCard--;
+      if (currentMainCard < 0) currentMainCard = MAIN_CARD_COUNT - 1;
+      currentSubCard = 0;
+    } else if (dx < -50) {
+      currentMainCard++;
+      if (currentMainCard >= MAIN_CARD_COUNT) currentMainCard = 0;
+      currentSubCard = 0;
     }
-private:
-    void writeReg(uint8_t r,uint8_t v) { Wire.beginTransmission(QMI8658_ADDR); Wire.write(r); Wire.write(v); Wire.endTransmission(); }
-    uint8_t readReg(uint8_t r) { Wire.beginTransmission(QMI8658_ADDR); Wire.write(r); Wire.endTransmission(); Wire.requestFrom(QMI8658_ADDR,(uint8_t)1); return Wire.read(); }
-};
-
-XCA9554 expander;
-FT3168 touch;
-PCF85063 rtc;
-AXP2101 pmu;
-QMI8658 imu;
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  UI WIDGET FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════
-
-void drawGradientV(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c1, uint16_t c2) {
-    for (int16_t i = 0; i < h; i++) {
-        uint8_t r1 = (c1 >> 11) & 0x1F, g1 = (c1 >> 5) & 0x3F, b1 = c1 & 0x1F;
-        uint8_t r2 = (c2 >> 11) & 0x1F, g2 = (c2 >> 5) & 0x3F, b2 = c2 & 0x1F;
-        float t = (float)i / h;
-        uint8_t r = r1 + (r2 - r1) * t;
-        uint8_t g = g1 + (g2 - g1) * t;
-        uint8_t b = b1 + (b2 - b1) * t;
-        uint16_t col = ((r & 0x1F) << 11) | ((g & 0x3F) << 5) | (b & 0x1F);
-        gfx->drawFastHLine(x, y + i, w, col);
+  } else {
+    if (dy > 50) {
+      if (currentSubCard < subCardCounts[currentMainCard] - 1) {
+        currentSubCard++;
+      }
+    } else if (dy < -50) {
+      if (currentSubCard > 0) {
+        currentSubCard--;
+      }
     }
+  }
+  
+  navigateToCard(currentMainCard, currentSubCard);
 }
 
-void drawGradientCard(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c1, uint16_t c2) {
-    drawGradientV(x, y, w, h, c1, c2);
-    gfx->drawRoundRect(x, y, w, h, CARD_RADIUS, c1);
+// ============================================
+// NAVIGATION
+// ============================================
+void navigateToCard(int mainCard, int subCard) {
+  lv_obj_clean(lv_scr_act());
+  
+  Theme &t = themes[currentTheme];
+  lv_obj_set_style_bg_color(lv_scr_act(), t.bg, 0);
+  
+  switch (mainCard) {
+    case CARD_CLOCK:
+      if (subCard == 0) createClockCard();
+      else createAnalogClockCard();
+      break;
+    case CARD_COMPASS: createCompassCard(); break;
+    case CARD_ACTIVITY_RINGS: createActivityRingsCard(); break;
+    case CARD_STEPS: createStepsCard(); break;
+    case CARD_WORKOUT: createWorkoutCard(); break;
+    case CARD_SLEEP:
+      if (subCard == 0) createSleepCard();
+      else createSleepGraphCard();
+      break;
+    case CARD_STREAK: createStreakCard(); break;
+    case CARD_DAILY_GOAL: createDailyGoalCard(); break;
+    case CARD_MUSIC: createMusicCard(); break;
+    case CARD_WEATHER: createWeatherCard(); break;
+    case CARD_QUOTE: createQuoteCard(); break;
+    case CARD_YESNO: createYesNoCard(); break;
+    case CARD_TIMER: createTimerCard(); break;
+    case CARD_DINO: createDinoCard(); break;
+    case CARD_VOLUME: createVolumeCard(); break;
+    case CARD_WORLD_CLOCK: createWorldClockCard(); break;
+    case CARD_CALENDAR: createCalendarCard(); break;
+    case CARD_NOTES: createNotesCard(); break;
+    case CARD_TORCH: createTorchCard(); break;
+    case CARD_BATTERY: createBatteryCard(); break;
+    case CARD_GALLERY: createGalleryCard(); break;
+    case CARD_STOCKS:
+      if (subCard == 0) createStocksCard();
+      else createCryptoCard();
+      break;
+    case CARD_THEMES: createThemesCard(); break;
+    case CARD_SYSTEM: createSystemCard(); break;
+  }
+  
+  createNavigationDots();
 }
 
-void drawCard(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
-    gfx->fillRoundRect(x, y, w, h, CARD_RADIUS, color);
-}
-
-void drawButton(int16_t x, int16_t y, int16_t w, int16_t h, const char* label, uint16_t color) {
-    gfx->fillRoundRect(x, y, w, h, BTN_RADIUS, color);
-    gfx->setTextColor(theme->text);
-    gfx->setTextSize(2);
-    int16_t tw = strlen(label) * 12;
-    gfx->setCursor(x + (w - tw) / 2, y + (h - 16) / 2);
-    gfx->print(label);
-}
-
-void drawProgressBar(int16_t x, int16_t y, int16_t w, int16_t h, float progress, uint16_t fg, uint16_t bg) {
-    gfx->fillRoundRect(x, y, w, h, h/2, bg);
-    int16_t fw = (int16_t)(w * progress);
-    if (fw > 0) {
-        gfx->fillRoundRect(x, y, fw, h, h/2, fg);
+// ============================================
+// NAVIGATION DOTS
+// ============================================
+void createNavigationDots() {
+  Theme &t = themes[currentTheme];
+  
+  lv_obj_t *dotsContainer = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(dotsContainer, LCD_WIDTH, 20);
+  lv_obj_align(dotsContainer, LV_ALIGN_BOTTOM_MID, 0, -5);
+  lv_obj_set_style_bg_opa(dotsContainer, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(dotsContainer, 0, 0);
+  lv_obj_set_style_pad_all(dotsContainer, 0, 0);
+  lv_obj_set_flex_flow(dotsContainer, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(dotsContainer, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  
+  int startCard = max(0, min(currentMainCard - 2, MAIN_CARD_COUNT - 5));
+  int endCard = min(MAIN_CARD_COUNT, startCard + 5);
+  
+  for (int i = startCard; i < endCard; i++) {
+    lv_obj_t *dot = lv_obj_create(dotsContainer);
+    int size = (i == currentMainCard) ? 10 : 6;
+    lv_obj_set_size(dot, size, size);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(dot, (i == currentMainCard) ? t.accent : t.secondary, 0);
+    lv_obj_set_style_border_width(dot, 0, 0);
+    lv_obj_set_style_margin_all(dot, 3, 0);
+  }
+  
+  if (subCardCounts[currentMainCard] > 1) {
+    lv_obj_t *subDotsContainer = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(subDotsContainer, 20, 80);
+    lv_obj_align(subDotsContainer, LV_ALIGN_RIGHT_MID, -5, 0);
+    lv_obj_set_style_bg_opa(subDotsContainer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(subDotsContainer, 0, 0);
+    lv_obj_set_flex_flow(subDotsContainer, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(subDotsContainer, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    for (int i = 0; i < subCardCounts[currentMainCard]; i++) {
+      lv_obj_t *dot = lv_obj_create(subDotsContainer);
+      int size = (i == currentSubCard) ? 10 : 6;
+      lv_obj_set_size(dot, size, size);
+      lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(dot, (i == currentSubCard) ? t.accent : t.secondary, 0);
+      lv_obj_set_style_border_width(dot, 0, 0);
+      lv_obj_set_style_margin_all(dot, 4, 0);
     }
+  }
 }
 
-void drawSegmentedProgress(int16_t x, int16_t y, int16_t w, int16_t h, float progress, uint16_t fg, uint16_t bg) {
-    int16_t segW = (w - 36) / 4;
-    int currentSeg = (int)(progress * 4);
-    
-    for (int i = 0; i < 4; i++) {
-        int16_t sx = x + i * (segW + 12);
-        if (i < currentSeg) {
-            gfx->fillRoundRect(sx, y, segW, h, 4, fg);
-        } else if (i == currentSeg) {
-            float partial = (progress * 4) - currentSeg;
-            gfx->fillRoundRect(sx, y, segW, h, 4, bg);
-            if (partial > 0) {
-                int16_t pw = (int16_t)(segW * partial);
-                gfx->fillRoundRect(sx, y, pw, h, 4, fg);
-            }
-        } else {
-            gfx->fillRoundRect(sx, y, segW, h, 4, bg);
-        }
-    }
+// ============================================
+// HELPER: CREATE CARD CONTAINER
+// ============================================
+lv_obj_t* createCardContainer(const char* title) {
+  Theme &t = themes[currentTheme];
+  
+  lv_obj_t *card = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(card, LCD_WIDTH - 20, LCD_HEIGHT - 60);
+  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 10);
+  lv_obj_set_style_bg_color(card, t.card, 0);
+  lv_obj_set_style_radius(card, 20, 0);
+  lv_obj_set_style_border_width(card, 0, 0);
+  lv_obj_set_style_pad_all(card, 15, 0);
+  
+  lv_obj_t *titleLabel = lv_label_create(card);
+  lv_label_set_text(titleLabel, title);
+  lv_obj_set_style_text_color(titleLabel, t.text, 0);
+  lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_18, 0);
+  lv_obj_align(titleLabel, LV_ALIGN_TOP_MID, 0, 0);
+  
+  return card;
 }
 
-void drawProgressRing(int16_t cx, int16_t cy, int16_t r, int16_t thick, float prog, uint16_t fg, uint16_t bg) {
-    for (int i = 0; i < 360; i += 6) {
-        float a = i * DEG_TO_RAD;
-        gfx->fillCircle(cx + cos(a)*r, cy + sin(a)*r, thick/2, bg);
-    }
-    int end = (int)(prog * 360);
-    for (int i = 0; i < end; i += 6) {
-        float a = (i - 90) * DEG_TO_RAD;
-        gfx->fillCircle(cx + cos(a)*r, cy + sin(a)*r, thick/2, fg);
-    }
+// ============================================
+// CLOCK CARD (DIGITAL)
+// ============================================
+static lv_obj_t *clockTimeLabel = NULL;
+static lv_obj_t *clockDateLabel = NULL;
+static lv_obj_t *clockDayLabel = NULL;
+
+void createClockCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("CLOCK");
+  
+  clockTimeLabel = lv_label_create(card);
+  lv_label_set_text(clockTimeLabel, "00:00");
+  lv_obj_set_style_text_color(clockTimeLabel, t.text, 0);
+  lv_obj_set_style_text_font(clockTimeLabel, &lv_font_montserrat_48, 0);
+  lv_obj_align(clockTimeLabel, LV_ALIGN_CENTER, 0, -30);
+  
+  clockDateLabel = lv_label_create(card);
+  lv_label_set_text(clockDateLabel, "Dec 01, 2024");
+  lv_obj_set_style_text_color(clockDateLabel, t.secondary, 0);
+  lv_obj_set_style_text_font(clockDateLabel, &lv_font_montserrat_16, 0);
+  lv_obj_align(clockDateLabel, LV_ALIGN_CENTER, 0, 30);
+  
+  clockDayLabel = lv_label_create(card);
+  lv_label_set_text(clockDayLabel, "Monday");
+  lv_obj_set_style_text_color(clockDayLabel, t.accent, 0);
+  lv_obj_set_style_text_font(clockDayLabel, &lv_font_montserrat_18, 0);
+  lv_obj_align(clockDayLabel, LV_ALIGN_CENTER, 0, 60);
+  
+  lv_obj_t *wifiLabel = lv_label_create(card);
+  if (WiFi.status() == WL_CONNECTED) {
+    lv_label_set_text(wifiLabel, LV_SYMBOL_WIFI " Connected");
+    lv_obj_set_style_text_color(wifiLabel, lv_color_hex(0x4CAF50), 0);
+  } else {
+    lv_label_set_text(wifiLabel, LV_SYMBOL_WIFI " Disconnected");
+    lv_obj_set_style_text_color(wifiLabel, lv_color_hex(0xFF5252), 0);
+  }
+  lv_obj_set_style_text_font(wifiLabel, &lv_font_montserrat_14, 0);
+  lv_obj_align(wifiLabel, LV_ALIGN_BOTTOM_MID, 0, -10);
 }
 
-void drawBatteryIcon(int16_t x, int16_t y, uint8_t percent) {
-    uint16_t col = percent > 20 ? theme->success : theme->danger;
-    gfx->drawRect(x, y + 2, 20, 10, theme->textDim);
-    gfx->fillRect(x + 20, y + 4, 2, 6, theme->textDim);
-    int16_t fillW = (18 * percent) / 100;
-    gfx->fillRect(x + 1, y + 3, fillW, 8, col);
+// ============================================
+// ANALOG CLOCK CARD
+// ============================================
+void createAnalogClockCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("");
+  
+  int cx = (LCD_WIDTH - 40) / 2;
+  int cy = (LCD_HEIGHT - 100) / 2;
+  int radius = 120;
+  
+  // Clock face background
+  lv_obj_t *clockFace = lv_obj_create(card);
+  lv_obj_set_size(clockFace, radius * 2 + 20, radius * 2 + 20);
+  lv_obj_align(clockFace, LV_ALIGN_CENTER, 0, -10);
+  lv_obj_set_style_bg_color(clockFace, t.bg, 0);
+  lv_obj_set_style_radius(clockFace, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_color(clockFace, t.secondary, 0);
+  lv_obj_set_style_border_width(clockFace, 2, 0);
+  
+  // Roman numerals
+  const char* numerals[] = {"XII", "III", "VI", "IX"};
+  int positions[][2] = {{0, -100}, {100, 0}, {0, 100}, {-100, 0}};
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t *numLabel = lv_label_create(clockFace);
+    lv_label_set_text(numLabel, numerals[i]);
+    lv_obj_set_style_text_color(numLabel, t.text, 0);
+    lv_obj_set_style_text_font(numLabel, &lv_font_montserrat_16, 0);
+    lv_obj_align(numLabel, LV_ALIGN_CENTER, positions[i][0], positions[i][1]);
+  }
+  
+  // Get current time for hands
+  RTC_DateTime datetime = rtc.getDateTime();
+  float hourAngle = ((datetime.hour % 12) + datetime.minute / 60.0) * 30.0 - 90;
+  float minAngle = datetime.minute * 6.0 - 90;
+  
+  // Hour hand (red)
+  lv_obj_t *hourHand = lv_obj_create(clockFace);
+  lv_obj_set_size(hourHand, 60, 6);
+  lv_obj_align(hourHand, LV_ALIGN_CENTER, 25, 0);
+  lv_obj_set_style_bg_color(hourHand, lv_color_hex(0xFF0000), 0);
+  lv_obj_set_style_radius(hourHand, 3, 0);
+  lv_obj_set_style_border_width(hourHand, 0, 0);
+  
+  // Minute hand (blue)
+  lv_obj_t *minHand = lv_obj_create(clockFace);
+  lv_obj_set_size(minHand, 80, 4);
+  lv_obj_align(minHand, LV_ALIGN_CENTER, 35, 0);
+  lv_obj_set_style_bg_color(minHand, lv_color_hex(0x0088FF), 0);
+  lv_obj_set_style_radius(minHand, 2, 0);
+  lv_obj_set_style_border_width(minHand, 0, 0);
+  
+  // Center dot
+  lv_obj_t *centerDot = lv_obj_create(clockFace);
+  lv_obj_set_size(centerDot, 16, 16);
+  lv_obj_align(centerDot, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(centerDot, t.text, 0);
+  lv_obj_set_style_radius(centerDot, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(centerDot, 0, 0);
 }
 
-void drawStatusBar() {
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN, 10);
-    gfx->print(cardNames[currentMainCard]);
-    drawBatteryIcon(LCD_WIDTH - 35, 8, batteryPercent);
+// ============================================
+// COMPASS CARD (Based on reference image)
+// ============================================
+void createCompassCard() {
+  Theme &t = themes[currentTheme];
+  
+  // Full screen black background for compass
+  lv_obj_t *card = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(card, LCD_WIDTH - 20, LCD_HEIGHT - 60);
+  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 10);
+  lv_obj_set_style_bg_color(card, lv_color_hex(0x1A1A1A), 0);
+  lv_obj_set_style_radius(card, 25, 0);
+  lv_obj_set_style_border_width(card, 0, 0);
+  
+  // Cardinal directions
+  lv_obj_t *northLabel = lv_label_create(card);
+  lv_label_set_text(northLabel, "N");
+  lv_obj_set_style_text_color(northLabel, lv_color_hex(0xCCCCCC), 0);
+  lv_obj_set_style_text_font(northLabel, &lv_font_montserrat_24, 0);
+  lv_obj_align(northLabel, LV_ALIGN_TOP_MID, 0, 20);
+  
+  lv_obj_t *southLabel = lv_label_create(card);
+  lv_label_set_text(southLabel, "S");
+  lv_obj_set_style_text_color(southLabel, lv_color_hex(0xCCCCCC), 0);
+  lv_obj_set_style_text_font(southLabel, &lv_font_montserrat_24, 0);
+  lv_obj_align(southLabel, LV_ALIGN_BOTTOM_MID, 0, -40);
+  
+  lv_obj_t *eastLabel = lv_label_create(card);
+  lv_label_set_text(eastLabel, "E");
+  lv_obj_set_style_text_color(eastLabel, lv_color_hex(0xCCCCCC), 0);
+  lv_obj_set_style_text_font(eastLabel, &lv_font_montserrat_24, 0);
+  lv_obj_align(eastLabel, LV_ALIGN_RIGHT_MID, -20, 0);
+  
+  lv_obj_t *westLabel = lv_label_create(card);
+  lv_label_set_text(westLabel, "W");
+  lv_obj_set_style_text_color(westLabel, lv_color_hex(0xCCCCCC), 0);
+  lv_obj_set_style_text_font(westLabel, &lv_font_montserrat_24, 0);
+  lv_obj_align(westLabel, LV_ALIGN_LEFT_MID, 20, 0);
+  
+  // Sunrise label and time
+  lv_obj_t *sunriseLabel = lv_label_create(card);
+  lv_label_set_text(sunriseLabel, "SUNRISE");
+  lv_obj_set_style_text_color(sunriseLabel, lv_color_hex(0x88CCFF), 0);
+  lv_obj_set_style_text_font(sunriseLabel, &lv_font_montserrat_12, 0);
+  lv_obj_align(sunriseLabel, LV_ALIGN_CENTER, 0, -80);
+  
+  lv_obj_t *sunriseTimeLabel = lv_label_create(card);
+  lv_label_set_text(sunriseTimeLabel, sunriseTime);
+  lv_obj_set_style_text_color(sunriseTimeLabel, lv_color_hex(0xFFCC44), 0);
+  lv_obj_set_style_text_font(sunriseTimeLabel, &lv_font_montserrat_36, 0);
+  lv_obj_align(sunriseTimeLabel, LV_ALIGN_CENTER, 0, -50);
+  
+  // Sunset label and time
+  lv_obj_t *sunsetTimeLabel = lv_label_create(card);
+  lv_label_set_text(sunsetTimeLabel, sunsetTime);
+  lv_obj_set_style_text_color(sunsetTimeLabel, lv_color_hex(0xFF8844), 0);
+  lv_obj_set_style_text_font(sunsetTimeLabel, &lv_font_montserrat_36, 0);
+  lv_obj_align(sunsetTimeLabel, LV_ALIGN_CENTER, 0, 50);
+  
+  lv_obj_t *sunsetLabel = lv_label_create(card);
+  lv_label_set_text(sunsetLabel, "SUNSET");
+  lv_obj_set_style_text_color(sunsetLabel, lv_color_hex(0xFF8844), 0);
+  lv_obj_set_style_text_font(sunsetLabel, &lv_font_montserrat_12, 0);
+  lv_obj_align(sunsetLabel, LV_ALIGN_CENTER, 0, 80);
+  
+  // Compass needle - Red tip (N)
+  lv_obj_t *needleRed = lv_obj_create(card);
+  lv_obj_set_size(needleRed, 8, 80);
+  lv_obj_align(needleRed, LV_ALIGN_CENTER, 40, -20);
+  lv_obj_set_style_bg_color(needleRed, lv_color_hex(0xFF3333), 0);
+  lv_obj_set_style_radius(needleRed, 4, 0);
+  lv_obj_set_style_border_width(needleRed, 0, 0);
+  
+  // Compass needle - Blue (S)
+  lv_obj_t *needleBlue = lv_obj_create(card);
+  lv_obj_set_size(needleBlue, 8, 80);
+  lv_obj_align(needleBlue, LV_ALIGN_CENTER, -40, 20);
+  lv_obj_set_style_bg_color(needleBlue, lv_color_hex(0x3388FF), 0);
+  lv_obj_set_style_radius(needleBlue, 4, 0);
+  lv_obj_set_style_border_width(needleBlue, 0, 0);
+  
+  // Center pivot
+  lv_obj_t *centerDot = lv_obj_create(card);
+  lv_obj_set_size(centerDot, 20, 20);
+  lv_obj_align(centerDot, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(centerDot, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_radius(centerDot, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(centerDot, 0, 0);
 }
 
-void drawNavHint(const char* hint) {
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDimmer);
-    int16_t tw = strlen(hint) * 6;
-    gfx->setCursor((LCD_WIDTH - tw) / 2, LCD_HEIGHT - 25);
-    gfx->print(hint);
+// ============================================
+// ACTIVITY RINGS CARD
+// ============================================
+void createActivityRingsCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("ACTIVITY");
+  
+  // Move ring (Red/Pink)
+  lv_obj_t *moveArc = lv_arc_create(card);
+  lv_obj_set_size(moveArc, 200, 200);
+  lv_obj_align(moveArc, LV_ALIGN_CENTER, 0, 0);
+  lv_arc_set_rotation(moveArc, 270);
+  lv_arc_set_bg_angles(moveArc, 0, 360);
+  lv_arc_set_value(moveArc, moveProgress);
+  lv_obj_set_style_arc_color(moveArc, lv_color_hex(0x3A1515), LV_PART_MAIN);
+  lv_obj_set_style_arc_color(moveArc, lv_color_hex(0xFF2D55), LV_PART_INDICATOR);
+  lv_obj_set_style_arc_width(moveArc, 18, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(moveArc, 18, LV_PART_INDICATOR);
+  lv_obj_remove_style(moveArc, NULL, LV_PART_KNOB);
+  
+  // Exercise ring (Green)
+  lv_obj_t *exerciseArc = lv_arc_create(card);
+  lv_obj_set_size(exerciseArc, 160, 160);
+  lv_obj_align(exerciseArc, LV_ALIGN_CENTER, 0, 0);
+  lv_arc_set_rotation(exerciseArc, 270);
+  lv_arc_set_bg_angles(exerciseArc, 0, 360);
+  lv_arc_set_value(exerciseArc, exerciseProgress);
+  lv_obj_set_style_arc_color(exerciseArc, lv_color_hex(0x152A15), LV_PART_MAIN);
+  lv_obj_set_style_arc_color(exerciseArc, lv_color_hex(0x30D158), LV_PART_INDICATOR);
+  lv_obj_set_style_arc_width(exerciseArc, 18, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(exerciseArc, 18, LV_PART_INDICATOR);
+  lv_obj_remove_style(exerciseArc, NULL, LV_PART_KNOB);
+  
+  // Stand ring (Blue)
+  lv_obj_t *standArc = lv_arc_create(card);
+  lv_obj_set_size(standArc, 120, 120);
+  lv_obj_align(standArc, LV_ALIGN_CENTER, 0, 0);
+  lv_arc_set_rotation(standArc, 270);
+  lv_arc_set_bg_angles(standArc, 0, 360);
+  lv_arc_set_value(standArc, standProgress);
+  lv_obj_set_style_arc_color(standArc, lv_color_hex(0x152030), LV_PART_MAIN);
+  lv_obj_set_style_arc_color(standArc, lv_color_hex(0x5AC8FA), LV_PART_INDICATOR);
+  lv_obj_set_style_arc_width(standArc, 18, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(standArc, 18, LV_PART_INDICATOR);
+  lv_obj_remove_style(standArc, NULL, LV_PART_KNOB);
+  
+  // Labels
+  lv_obj_t *moveLabel = lv_label_create(card);
+  char moveBuf[16];
+  snprintf(moveBuf, sizeof(moveBuf), "%d%%", moveProgress);
+  lv_label_set_text(moveLabel, moveBuf);
+  lv_obj_set_style_text_color(moveLabel, lv_color_hex(0xFF2D55), 0);
+  lv_obj_set_style_text_font(moveLabel, &lv_font_montserrat_14, 0);
+  lv_obj_align(moveLabel, LV_ALIGN_BOTTOM_LEFT, 20, -30);
+  
+  lv_obj_t *exerciseLabel = lv_label_create(card);
+  char exBuf[16];
+  snprintf(exBuf, sizeof(exBuf), "%d%%", exerciseProgress);
+  lv_label_set_text(exerciseLabel, exBuf);
+  lv_obj_set_style_text_color(exerciseLabel, lv_color_hex(0x30D158), 0);
+  lv_obj_set_style_text_font(exerciseLabel, &lv_font_montserrat_14, 0);
+  lv_obj_align(exerciseLabel, LV_ALIGN_BOTTOM_MID, 0, -30);
+  
+  lv_obj_t *standLabel = lv_label_create(card);
+  char stBuf[16];
+  snprintf(stBuf, sizeof(stBuf), "%d%%", standProgress);
+  lv_label_set_text(standLabel, stBuf);
+  lv_obj_set_style_text_color(standLabel, lv_color_hex(0x5AC8FA), 0);
+  lv_obj_set_style_text_font(standLabel, &lv_font_montserrat_14, 0);
+  lv_obj_align(standLabel, LV_ALIGN_BOTTOM_RIGHT, -20, -30);
 }
 
-void drawNavDots() {
-    int16_t dotY = LCD_HEIGHT - 40;
-    int16_t startX = (LCD_WIDTH - (MAIN_CARD_COUNT * 10)) / 2;
-    
-    for (int i = 0; i < MAIN_CARD_COUNT; i++) {
-        uint16_t col = (i == currentMainCard) ? theme->accent1 : theme->cardLight;
-        int16_t r = (i == currentMainCard) ? 4 : 3;
-        gfx->fillCircle(startX + i * 10 + 5, dotY, r, col);
-    }
+// ============================================
+// STEPS CARD
+// ============================================
+void createStepsCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("STEPS");
+  
+  // Step count (large)
+  lv_obj_t *stepsLabel = lv_label_create(card);
+  char stepsBuf[32];
+  snprintf(stepsBuf, sizeof(stepsBuf), "%lu", stepCount);
+  lv_label_set_text(stepsLabel, stepsBuf);
+  lv_obj_set_style_text_color(stepsLabel, t.accent, 0);
+  lv_obj_set_style_text_font(stepsLabel, &lv_font_montserrat_48, 0);
+  lv_obj_align(stepsLabel, LV_ALIGN_CENTER, 0, -50);
+  
+  // Goal progress bar
+  lv_obj_t *progressBar = lv_bar_create(card);
+  lv_obj_set_size(progressBar, LCD_WIDTH - 100, 20);
+  lv_obj_align(progressBar, LV_ALIGN_CENTER, 0, 20);
+  int progress = min(100, (int)(stepCount * 100 / dailyGoal));
+  lv_bar_set_value(progressBar, progress, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(progressBar, t.secondary, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(progressBar, t.accent, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(progressBar, 10, LV_PART_MAIN);
+  lv_obj_set_style_radius(progressBar, 10, LV_PART_INDICATOR);
+  
+  // Goal label
+  char goalBuf[32];
+  snprintf(goalBuf, sizeof(goalBuf), "%lu / %d goal", stepCount, dailyGoal);
+  lv_obj_t *goalLabel = lv_label_create(card);
+  lv_label_set_text(goalLabel, goalBuf);
+  lv_obj_set_style_text_color(goalLabel, t.secondary, 0);
+  lv_obj_align(goalLabel, LV_ALIGN_CENTER, 0, 55);
+  
+  // Distance & Calories
+  lv_obj_t *statsRow = lv_obj_create(card);
+  lv_obj_set_size(statsRow, LCD_WIDTH - 60, 60);
+  lv_obj_align(statsRow, LV_ALIGN_BOTTOM_MID, 0, -30);
+  lv_obj_set_style_bg_color(statsRow, t.bg, 0);
+  lv_obj_set_style_radius(statsRow, 12, 0);
+  lv_obj_set_style_border_width(statsRow, 0, 0);
+  
+  char distBuf[16];
+  snprintf(distBuf, sizeof(distBuf), "%.2f km", totalDistance);
+  lv_obj_t *distLabel = lv_label_create(statsRow);
+  lv_label_set_text(distLabel, distBuf);
+  lv_obj_set_style_text_color(distLabel, t.text, 0);
+  lv_obj_align(distLabel, LV_ALIGN_LEFT_MID, 20, 0);
+  
+  char calBuf[16];
+  snprintf(calBuf, sizeof(calBuf), "%.0f kcal", totalCalories);
+  lv_obj_t *calLabel = lv_label_create(statsRow);
+  lv_label_set_text(calLabel, calBuf);
+  lv_obj_set_style_text_color(calLabel, t.text, 0);
+  lv_obj_align(calLabel, LV_ALIGN_RIGHT_MID, -20, 0);
 }
 
-void drawFireIcon(int16_t x, int16_t y, int16_t size) {
-    // Simple fire emoji-like icon
-    uint16_t orange = RGB565(255, 107, 53);
-    uint16_t yellow = RGB565(255, 200, 50);
-    uint16_t red = RGB565(255, 50, 50);
-    
-    // Outer flame
-    gfx->fillCircle(x, y + size/4, size/2, orange);
-    gfx->fillTriangle(x - size/2, y + size/4, x + size/2, y + size/4, x, y - size/2, orange);
-    
-    // Inner flame
-    gfx->fillCircle(x, y + size/3, size/3, yellow);
-    gfx->fillTriangle(x - size/3, y + size/3, x + size/3, y + size/3, x, y - size/4, yellow);
+// ============================================
+// WORKOUT CARD
+// ============================================
+void workoutBtnCallback(lv_event_t *e) {
+  int mode = (int)(intptr_t)lv_event_get_user_data(e);
+  if (currentWorkout == WORKOUT_NONE) {
+    currentWorkout = (WorkoutMode)mode;
+    workoutStartTime = millis();
+    workoutSteps = stepCount;
+  } else {
+    currentWorkout = WORKOUT_NONE;
+  }
+  navigateToCard(CARD_WORKOUT, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  MAIN CARD SCREENS
-// ═══════════════════════════════════════════════════════════════════════════
-
-void drawMainClock() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
+void createWorkoutCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("WORKOUT");
+  
+  const char* workoutNames[] = {"Bike", "Run", "Basketball"};
+  const char* workoutIcons[] = {LV_SYMBOL_DRIVE, LV_SYMBOL_SHUFFLE, LV_SYMBOL_REFRESH};
+  
+  if (currentWorkout != WORKOUT_NONE) {
+    lv_obj_t *activeLabel = lv_label_create(card);
+    lv_label_set_text(activeLabel, workoutNames[currentWorkout - 1]);
+    lv_obj_set_style_text_color(activeLabel, t.accent, 0);
+    lv_obj_set_style_text_font(activeLabel, &lv_font_montserrat_24, 0);
+    lv_obj_align(activeLabel, LV_ALIGN_CENTER, 0, -60);
     
-    // Main gradient card
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, theme->accent1, theme->accent2);
+    unsigned long duration = (millis() - workoutStartTime) / 1000;
+    char durBuf[32];
+    snprintf(durBuf, sizeof(durBuf), "%02lu:%02lu", duration / 60, duration % 60);
+    lv_obj_t *durLabel = lv_label_create(card);
+    lv_label_set_text(durLabel, durBuf);
+    lv_obj_set_style_text_color(durLabel, t.text, 0);
+    lv_obj_set_style_text_font(durLabel, &lv_font_montserrat_40, 0);
+    lv_obj_align(durLabel, LV_ALIGN_CENTER, 0, 0);
     
-    // Branding
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 80);
-    gfx->print("S3 MiniOS");
+    lv_obj_t *stopBtn = lv_btn_create(card);
+    lv_obj_set_size(stopBtn, 120, 50);
+    lv_obj_align(stopBtn, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_set_style_bg_color(stopBtn, lv_color_hex(0xFF5252), 0);
+    lv_obj_add_event_cb(stopBtn, workoutBtnCallback, LV_EVENT_CLICKED, (void*)0);
     
-    // Day
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 20, 120);
-    gfx->print(daysOfWeek[currentDay]);
-    
-    // Time
-    gfx->setTextSize(7);
-    gfx->setTextColor(theme->text);
-    char timeStr[10];
-    sprintf(timeStr, "%02d:%02d", clockHour, clockMinute);
-    gfx->setCursor(MARGIN + 20, 155);
-    gfx->print(timeStr);
-    
-    // Seconds
-    gfx->setTextSize(4);
-    gfx->setTextColor(theme->accent1);
-    gfx->setCursor(MARGIN + 260, 180);
-    gfx->printf("%02d", clockSecond);
-    
-    // Progress milestones
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setCursor(MARGIN + 15, 270);
-    gfx->print("00:00");
-    gfx->setCursor(MARGIN + 90, 270);
-    gfx->print("06:00");
-    gfx->setCursor(MARGIN + 165, 270);
-    gfx->print("12:00");
-    gfx->setCursor(MARGIN + 240, 270);
-    gfx->print("18:00");
-    
-    float dayProgress = (clockHour * 60.0f + clockMinute) / 1440.0f;
-    drawSegmentedProgress(MARGIN + 15, 285, LCD_WIDTH - 2*MARGIN - 30, 8, dayProgress, theme->text, theme->cardLight);
-    
-    drawNavDots();
-    drawNavHint("Swipe down for more");
-}
-
-void drawMainSteps() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
-    
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, theme->accent2, theme->accent1);
-    
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 80);
-    gfx->print("USBO App");
-    
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 20, 120);
-    gfx->print("Steps:");
-    
-    gfx->setTextSize(7);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 155);
-    gfx->print(stepCount);
-    
-    // Progress milestones
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setCursor(MARGIN + 15, 270);
-    gfx->print("2000");
-    gfx->setCursor(MARGIN + 100, 270);
-    gfx->print("4000");
-    gfx->setCursor(MARGIN + 185, 270);
-    gfx->print("6000");
-    gfx->setCursor(MARGIN + 270, 270);
-    gfx->print("8000");
-    
-    float stepProgress = (float)stepCount / 8000.0f;
-    if (stepProgress > 1.0f) stepProgress = 1.0f;
-    drawSegmentedProgress(MARGIN + 15, 285, LCD_WIDTH - 2*MARGIN - 30, 8, stepProgress, theme->text, theme->cardLight);
-    
-    drawNavDots();
-    drawNavHint("Swipe down for more");
-}
-
-void drawMainMusic() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
-    
-    drawCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 300, theme->card);
-    
-    // Album art placeholder
-    gfx->fillRoundRect(MARGIN + 20, 90, 100, 100, 12, theme->cardLight);
-    gfx->setTextColor(theme->textDim);
-    gfx->setTextSize(4);
-    gfx->setCursor(MARGIN + 50, 125);
-    gfx->print("J");
-    
-    // Song info
-    gfx->setTextColor(theme->text);
-    gfx->setTextSize(2);
-    gfx->setCursor(MARGIN + 140, 100);
-    gfx->print(musicTitle);
-    
-    gfx->setTextColor(theme->textDim);
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN + 140, 130);
-    gfx->print(musicArtist);
-    
-    // Playback controls
-    int16_t controlY = 230;
-    int16_t cx = LCD_WIDTH / 2;
-    
-    // Prev
-    gfx->fillCircle(cx - 70, controlY, 20, theme->cardLight);
-    gfx->setTextColor(theme->text);
-    gfx->setTextSize(2);
-    gfx->setCursor(cx - 82, controlY - 8);
-    gfx->print("|<");
-    
-    // Play/Pause
-    gfx->fillCircle(cx, controlY, 28, theme->text);
-    gfx->setTextColor(theme->bg);
-    gfx->setTextSize(3);
-    if (musicPlaying) {
-        gfx->setCursor(cx - 12, controlY - 12);
-        gfx->print("||");
-    } else {
-        gfx->setCursor(cx - 8, controlY - 12);
-        gfx->print(">");
-    }
-    
-    // Next
-    gfx->fillCircle(cx + 70, controlY, 20, theme->cardLight);
-    gfx->setTextColor(theme->text);
-    gfx->setTextSize(2);
-    gfx->setCursor(cx + 58, controlY - 8);
-    gfx->print(">|");
-    
-    // Progress
-    gfx->setTextColor(theme->textDim);
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN + 20, 300);
-    gfx->printf("%d:%02d", musicCurrent / 60, musicCurrent % 60);
-    gfx->setCursor(LCD_WIDTH - MARGIN - 30, 300);
-    gfx->printf("%d:%02d", musicDuration / 60, musicDuration % 60);
-    
-    drawProgressBar(MARGIN + 20, 320, LCD_WIDTH - 2*MARGIN - 40, 8, (float)musicCurrent / musicDuration, theme->accent2, theme->cardLight);
-    
-    drawNavDots();
-    drawNavHint("Swipe down for playlist");
-}
-
-void drawMainWeather() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
-    
-    // Weather gradient - sunny orange
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, RGB565(245, 175, 25), RGB565(241, 39, 17));
-    
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 80);
-    gfx->print("San Francisco");
-    
-    // Large temperature
-    gfx->setTextSize(8);
-    gfx->setCursor(MARGIN + 30, 130);
-    gfx->printf("%d", weatherTemp);
-    
-    gfx->setTextSize(4);
-    gfx->setCursor(MARGIN + 150, 135);
-    gfx->print("o");
-    
-    // Condition
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 20, 225);
-    gfx->print(weatherCondition);
-    
-    // Forecast
-    gfx->setTextSize(1);
-    int16_t forecastY = 270;
+    lv_obj_t *stopLabel = lv_label_create(stopBtn);
+    lv_label_set_text(stopLabel, "STOP");
+    lv_obj_center(stopLabel);
+  } else {
     for (int i = 0; i < 3; i++) {
-        int16_t fx = MARGIN + 30 + i * 100;
-        gfx->setTextColor(theme->textDimmer);
-        gfx->setCursor(fx, forecastY);
-        gfx->print(forecastDays[i]);
-        gfx->setTextColor(theme->text);
-        gfx->setTextSize(2);
-        gfx->setCursor(fx, forecastY + 15);
-        gfx->printf("%do", forecast[i]);
-        gfx->setTextSize(1);
+      lv_obj_t *btn = lv_btn_create(card);
+      lv_obj_set_size(btn, LCD_WIDTH - 80, 60);
+      lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, 50 + i * 80);
+      lv_obj_set_style_bg_color(btn, t.bg, 0);
+      lv_obj_set_style_radius(btn, 15, 0);
+      lv_obj_add_event_cb(btn, workoutBtnCallback, LV_EVENT_CLICKED, (void*)(intptr_t)(i + 1));
+      
+      lv_obj_t *icon = lv_label_create(btn);
+      lv_label_set_text(icon, workoutIcons[i]);
+      lv_obj_set_style_text_color(icon, t.accent, 0);
+      lv_obj_align(icon, LV_ALIGN_LEFT_MID, 10, 0);
+      
+      lv_obj_t *label = lv_label_create(btn);
+      lv_label_set_text(label, workoutNames[i]);
+      lv_obj_set_style_text_color(label, t.text, 0);
+      lv_obj_align(label, LV_ALIGN_LEFT_MID, 50, 0);
     }
-    
-    drawNavDots();
-    drawNavHint("Swipe down for details");
+  }
 }
 
-void drawMainCalendar() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
-    
-    drawCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 300, theme->card);
-    
-    // Month/Year header
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 80);
-    gfx->printf("%s %d", monthNames[currentMonth - 1], currentYear);
-    
-    // Day labels
-    const char* dayLabels[] = {"S", "M", "T", "W", "T", "F", "S"};
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    for (int i = 0; i < 7; i++) {
-        gfx->setCursor(MARGIN + 25 + i * 45, 120);
-        gfx->print(dayLabels[i]);
-    }
-    
-    // Calendar grid
-    int16_t gridY = 145;
-    int day = 1;
-    for (int row = 0; row < 5 && day <= 31; row++) {
-        for (int col = 0; col < 7 && day <= 31; col++) {
-            int16_t cx = MARGIN + 25 + col * 45;
-            int16_t cy = gridY + row * 35;
-            
-            if (day == currentDate) {
-                gfx->fillCircle(cx + 8, cy + 8, 14, theme->accent1);
-                gfx->setTextColor(theme->bg);
-            } else {
-                gfx->setTextColor(theme->text);
-            }
-            
-            gfx->setTextSize(2);
-            gfx->setCursor(cx, cy);
-            gfx->printf("%d", day);
-            day++;
-        }
-    }
-    
-    drawNavDots();
-    drawNavHint("Swipe down for events");
+// ============================================
+// SLEEP CARD
+// ============================================
+void sleepBtnCallback(lv_event_t *e) {
+  if (!sleepTrackingActive) {
+    sleepTrackingActive = true;
+    sleepStartTime = millis();
+    memset(movementData, 0, sizeof(movementData));
+    movementIndex = 0;
+  } else {
+    sleepTrackingActive = false;
+    sleepEndTime = millis();
+  }
+  navigateToCard(CARD_SLEEP, 0);
 }
 
-void drawMainGames() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
+void createSleepCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("SLEEP");
+  
+  if (sleepTrackingActive) {
+    unsigned long elapsed = (millis() - sleepStartTime) / 1000;
+    char timeBuf[32];
+    snprintf(timeBuf, sizeof(timeBuf), "%02lu:%02lu:%02lu", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60);
     
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, theme->accent4, theme->danger);
+    lv_obj_t *timeLabel = lv_label_create(card);
+    lv_label_set_text(timeLabel, timeBuf);
+    lv_obj_set_style_text_color(timeLabel, t.text, 0);
+    lv_obj_set_style_text_font(timeLabel, &lv_font_montserrat_36, 0);
+    lv_obj_align(timeLabel, LV_ALIGN_CENTER, 0, 0);
     
-    gfx->setTextSize(3);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 90);
-    gfx->print("GAMES HUB");
+    lv_obj_t *wakeBtn = lv_btn_create(card);
+    lv_obj_set_size(wakeBtn, 150, 50);
+    lv_obj_align(wakeBtn, LV_ALIGN_BOTTOM_MID, 0, -30);
+    lv_obj_set_style_bg_color(wakeBtn, lv_color_hex(0xFF9800), 0);
+    lv_obj_add_event_cb(wakeBtn, sleepBtnCallback, LV_EVENT_CLICKED, NULL);
     
-    const char* gameNames[] = {"Yes or No", "Clicker", "Reaction", "Dino Run"};
-    const char* gameDescs[] = {"Quick decision", "Tap fast!", "Test reflexes", "Jump obstacles"};
+    lv_obj_t *wakeLabel = lv_label_create(wakeBtn);
+    lv_label_set_text(wakeLabel, "WAKE UP");
+    lv_obj_center(wakeLabel);
+  } else {
+    lv_obj_t *startBtn = lv_btn_create(card);
+    lv_obj_set_size(startBtn, 180, 60);
+    lv_obj_align(startBtn, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(startBtn, t.accent, 0);
+    lv_obj_set_style_radius(startBtn, 30, 0);
+    lv_obj_add_event_cb(startBtn, sleepBtnCallback, LV_EVENT_CLICKED, NULL);
     
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setCursor(MARGIN + 20, 140);
-    gfx->print("FEATURED GAME");
-    
-    gfx->setTextSize(3);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 165);
-    gfx->print(gameNames[spotlightGame]);
-    
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 20, 205);
-    gfx->print(gameDescs[spotlightGame]);
-    
-    // Game indicators
-    int16_t iconY = 250;
-    for (int i = 0; i < 4; i++) {
-        uint16_t col = (i == spotlightGame) ? theme->text : theme->cardLight;
-        gfx->fillCircle(MARGIN + 40 + i * 50, iconY, 12, col);
-    }
-    
-    drawNavDots();
-    drawNavHint("Swipe down to play");
+    lv_obj_t *startLabel = lv_label_create(startBtn);
+    lv_label_set_text(startLabel, LV_SYMBOL_EYE_CLOSE " START");
+    lv_obj_center(startLabel);
+  }
 }
 
-void drawMainStreak() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
-    
-    drawCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, theme->card);
-    
-    // Fire icon
-    drawFireIcon(MARGIN + 60, 120, 50);
-    
-    // Streak count
-    gfx->setTextSize(6);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 100, 95);
-    gfx->print(streakDays);
-    
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 100, 160);
-    gfx->print("Streak Days");
-    
-    // Motivational text
-    gfx->fillRoundRect(MARGIN + 20, 200, LCD_WIDTH - 2*MARGIN - 40, 60, 12, theme->cardLight);
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 40, 220);
-    gfx->print("Keep going! You're on fire!");
-    
-    // Weekly dots
-    int16_t dotY = 280;
-    for (int i = 0; i < 7; i++) {
-        uint16_t col = dailyGoalMet[i] ? theme->success : theme->cardLight;
-        gfx->fillCircle(MARGIN + 40 + i * 40, dotY, 10, col);
-        if (dailyGoalMet[i]) {
-            gfx->setTextColor(theme->bg);
-            gfx->setTextSize(1);
-            gfx->setCursor(MARGIN + 36 + i * 40, dotY - 4);
-            gfx->print("v");
-        }
-    }
-    
-    drawNavDots();
-    drawNavHint("Swipe down for details");
+// ============================================
+// SLEEP GRAPH CARD
+// ============================================
+void createSleepGraphCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("SLEEP GRAPH");
+  
+  lv_obj_t *chart = lv_chart_create(card);
+  lv_obj_set_size(chart, LCD_WIDTH - 80, 180);
+  lv_obj_align(chart, LV_ALIGN_CENTER, 0, 20);
+  lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
+  lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
+  lv_chart_set_point_count(chart, 24);
+  
+  lv_chart_series_t *ser = lv_chart_add_series(chart, t.accent, LV_CHART_AXIS_PRIMARY_Y);
+  for (int i = 0; i < 24; i++) {
+    lv_chart_set_next_value(chart, ser, movementData[i]);
+  }
 }
 
-void drawMainFinance() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
-    
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, theme->accent1, theme->accent2);
-    
-    // Percentage badge
-    gfx->fillCircle(MARGIN + 40, 90, 18, theme->cardLight);
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->success);
-    gfx->setCursor(MARGIN + 30, 85);
-    gfx->print("66%");
-    
-    // Balance
-    gfx->setTextSize(4);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 130);
-    gfx->printf("$%.2f", accountBalance);
-    
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 20, 180);
-    gfx->printf("/ $%.2f budget", budgetGoal);
-    
-    // Progress bar
-    float progress = accountBalance / budgetGoal;
-    drawProgressBar(MARGIN + 20, 210, LCD_WIDTH - 2*MARGIN - 40, 10, progress, theme->text, theme->cardLight);
-    
-    // Quick crypto stats
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setCursor(MARGIN + 20, 250);
-    gfx->print("BTC");
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 50, 250);
-    gfx->printf("$%.0f", btcPrice);
-    gfx->setTextColor(theme->success);
-    gfx->setCursor(MARGIN + 150, 250);
-    gfx->printf("+%.1f%%", btcChange);
-    
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setCursor(MARGIN + 20, 270);
-    gfx->print("ETH");
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 50, 270);
-    gfx->printf("$%.0f", ethPrice);
-    gfx->setTextColor(theme->danger);
-    gfx->setCursor(MARGIN + 150, 270);
-    gfx->printf("%.1f%%", ethChange);
-    
-    drawNavDots();
-    drawNavHint("Swipe down for budget");
+// ============================================
+// STREAK CARD
+// ============================================
+void createStreakCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("STREAK");
+  
+  // Large streak number
+  char streakBuf[16];
+  snprintf(streakBuf, sizeof(streakBuf), "%d", currentStreak);
+  lv_obj_t *streakLabel = lv_label_create(card);
+  lv_label_set_text(streakLabel, streakBuf);
+  lv_obj_set_style_text_color(streakLabel, lv_color_hex(0xFF9500), 0);
+  lv_obj_set_style_text_font(streakLabel, &lv_font_montserrat_48, 0);
+  lv_obj_align(streakLabel, LV_ALIGN_CENTER, 0, -30);
+  
+  lv_obj_t *daysLabel = lv_label_create(card);
+  lv_label_set_text(daysLabel, "days");
+  lv_obj_set_style_text_color(daysLabel, t.secondary, 0);
+  lv_obj_set_style_text_font(daysLabel, &lv_font_montserrat_20, 0);
+  lv_obj_align(daysLabel, LV_ALIGN_CENTER, 0, 20);
+  
+  // Fire emoji placeholder
+  lv_obj_t *fireLabel = lv_label_create(card);
+  lv_label_set_text(fireLabel, LV_SYMBOL_CHARGE);
+  lv_obj_set_style_text_color(fireLabel, lv_color_hex(0xFF9500), 0);
+  lv_obj_set_style_text_font(fireLabel, &lv_font_montserrat_36, 0);
+  lv_obj_align(fireLabel, LV_ALIGN_CENTER, 0, 70);
 }
 
-void drawMainSystem() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
-    
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 300, theme->accent3, theme->accent1);
-    
-    gfx->setTextSize(3);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 85);
-    gfx->print("SYSTEM INFO");
-    
-    int16_t statY = 140;
-    int16_t statSpacing = 50;
-    
-    // CPU
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setCursor(MARGIN + 20, statY);
-    gfx->print("CPU USAGE");
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, statY + 15);
-    gfx->printf("%d%%", cpuUsage);
-    drawProgressBar(MARGIN + 100, statY + 18, 200, 8, (float)cpuUsage / 100.0f, theme->text, theme->cardLight);
-    
-    // RAM
-    statY += statSpacing;
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setCursor(MARGIN + 20, statY);
-    gfx->print("FREE RAM");
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, statY + 15);
-    gfx->printf("%lu KB", freeRAM / 1024);
-    
-    // Temperature
-    statY += statSpacing;
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setCursor(MARGIN + 20, statY);
-    gfx->print("TEMPERATURE");
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, statY + 15);
-    gfx->printf("%.1fC", temperature);
-    
-    // FPS
-    statY += statSpacing;
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDimmer);
-    gfx->setCursor(MARGIN + 20, statY);
-    gfx->print("FPS");
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, statY + 15);
-    gfx->printf("%d", fps);
-    
-    drawNavDots();
-    drawNavHint("Swipe down for more");
+// ============================================
+// DAILY GOAL CARD
+// ============================================
+void createDailyGoalCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("DAILY GOAL");
+  
+  int progress = min(100, (int)(stepCount * 100 / dailyGoal));
+  
+  // Circular progress
+  lv_obj_t *arc = lv_arc_create(card);
+  lv_obj_set_size(arc, 180, 180);
+  lv_obj_align(arc, LV_ALIGN_CENTER, 0, -20);
+  lv_arc_set_rotation(arc, 270);
+  lv_arc_set_bg_angles(arc, 0, 360);
+  lv_arc_set_value(arc, progress);
+  lv_obj_set_style_arc_color(arc, t.secondary, LV_PART_MAIN);
+  lv_obj_set_style_arc_color(arc, lv_color_hex(0x4CAF50), LV_PART_INDICATOR);
+  lv_obj_set_style_arc_width(arc, 15, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(arc, 15, LV_PART_INDICATOR);
+  lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+  
+  // Percentage
+  char percBuf[16];
+  snprintf(percBuf, sizeof(percBuf), "%d%%", progress);
+  lv_obj_t *percLabel = lv_label_create(card);
+  lv_label_set_text(percLabel, percBuf);
+  lv_obj_set_style_text_color(percLabel, t.text, 0);
+  lv_obj_set_style_text_font(percLabel, &lv_font_montserrat_36, 0);
+  lv_obj_align(percLabel, LV_ALIGN_CENTER, 0, -20);
+  
+  // Goal text
+  char goalBuf[32];
+  snprintf(goalBuf, sizeof(goalBuf), "%d steps goal", dailyGoal);
+  lv_obj_t *goalLabel = lv_label_create(card);
+  lv_label_set_text(goalLabel, goalBuf);
+  lv_obj_set_style_text_color(goalLabel, t.secondary, 0);
+  lv_obj_align(goalLabel, LV_ALIGN_BOTTOM_MID, 0, -30);
 }
 
-void drawMainTimer() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
-    
-    // Dark green hourglass theme
-    drawCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 280, RGB565(10, 47, 31));
-    
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor((LCD_WIDTH - 80) / 2, 90);
-    gfx->print("Hourglass Timer");
-    
-    // Hourglass visualization
-    int16_t cx = LCD_WIDTH / 2;
-    int16_t cy = 180;
-    
-    // Top triangle
-    gfx->fillTriangle(cx - 40, cy - 60, cx + 40, cy - 60, cx, cy, theme->success);
-    // Bottom triangle
-    gfx->fillTriangle(cx - 40, cy + 60, cx + 40, cy + 60, cx, cy, theme->cardLight);
-    // Sand in bottom
-    gfx->fillTriangle(cx - 30, cy + 60, cx + 30, cy + 60, cx, cy + 20, theme->success);
-    
-    // Time display
-    gfx->setTextSize(4);
-    gfx->setTextColor(theme->success);
-    gfx->setCursor(cx - 40, 280);
-    gfx->print("24 s");
-    
-    drawNavDots();
-    drawNavHint("Swipe down for stopwatch");
+// ============================================
+// MUSIC CARD
+// ============================================
+void musicBtnCallback(lv_event_t *e) {
+  int action = (int)(intptr_t)lv_event_get_user_data(e);
+  if (action == 0) { currentTrack--; if (currentTrack < 0) currentTrack = max(0, musicFileCount - 1); }
+  else if (action == 1) { musicPlaying = !musicPlaying; }
+  else if (action == 2) { currentTrack++; if (currentTrack >= musicFileCount) currentTrack = 0; }
+  navigateToCard(CARD_MUSIC, 0);
 }
 
-void drawMainSettings() {
-    gfx->fillScreen(theme->bg);
-    drawStatusBar();
+void createMusicCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("MUSIC");
+  
+  if (musicFileCount == 0) {
+    lv_obj_t *noMusic = lv_label_create(card);
+    lv_label_set_text(noMusic, "No music found\n\nPlace files in /Music");
+    lv_obj_set_style_text_color(noMusic, t.secondary, 0);
+    lv_obj_set_style_text_align(noMusic, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(noMusic, LV_ALIGN_CENTER, 0, 0);
+    return;
+  }
+  
+  // Album art placeholder
+  lv_obj_t *albumArt = lv_obj_create(card);
+  lv_obj_set_size(albumArt, 120, 120);
+  lv_obj_align(albumArt, LV_ALIGN_CENTER, 0, -50);
+  lv_obj_set_style_bg_color(albumArt, t.accent, 0);
+  lv_obj_set_style_radius(albumArt, 15, 0);
+  lv_obj_set_style_border_width(albumArt, 0, 0);
+  
+  lv_obj_t *musicIcon = lv_label_create(albumArt);
+  lv_label_set_text(musicIcon, LV_SYMBOL_AUDIO);
+  lv_obj_set_style_text_color(musicIcon, t.text, 0);
+  lv_obj_set_style_text_font(musicIcon, &lv_font_montserrat_48, 0);
+  lv_obj_center(musicIcon);
+  
+  // Controls
+  lv_obj_t *controlsContainer = lv_obj_create(card);
+  lv_obj_set_size(controlsContainer, 200, 60);
+  lv_obj_align(controlsContainer, LV_ALIGN_BOTTOM_MID, 0, -30);
+  lv_obj_set_style_bg_opa(controlsContainer, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(controlsContainer, 0, 0);
+  lv_obj_set_flex_flow(controlsContainer, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(controlsContainer, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  
+  const char *icons[] = {LV_SYMBOL_PREV, musicPlaying ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY, LV_SYMBOL_NEXT};
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t *btn = lv_btn_create(controlsContainer);
+    lv_obj_set_size(btn, 50, 50);
+    lv_obj_set_style_bg_color(btn, i == 1 ? t.accent : t.bg, 0);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_add_event_cb(btn, musicBtnCallback, LV_EVENT_CLICKED, (void*)(intptr_t)i);
     
-    drawCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 300, theme->card);
-    
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 20, 80);
-    gfx->print("SETTINGS");
-    
-    // Settings grid
-    const char* settingIcons[] = {"THM", "DIS", "SND", "ABT"};
-    const char* settingNames[] = {"Theme", "Display", "Sound", "About"};
-    
-    for (int i = 0; i < 4; i++) {
-        int16_t x = MARGIN + 30 + (i % 2) * 150;
-        int16_t y = 130 + (i / 2) * 100;
-        
-        gfx->fillRoundRect(x, y, 120, 80, 12, theme->cardLight);
-        gfx->setTextSize(2);
-        gfx->setTextColor(theme->accent1);
-        gfx->setCursor(x + 40, y + 20);
-        gfx->print(settingIcons[i]);
-        gfx->setTextSize(1);
-        gfx->setTextColor(theme->textDim);
-        gfx->setCursor(x + 30, y + 55);
-        gfx->print(settingNames[i]);
-    }
-    
-    drawNavDots();
-    drawNavHint("Swipe down for options");
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, icons[i]);
+    lv_obj_center(label);
+  }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  SUB-CARD SCREENS
-// ═══════════════════════════════════════════════════════════════════════════
-
-void drawSubHeader(const char* title) {
-    gfx->setTextColor(theme->text);
-    gfx->setTextSize(2);
-    gfx->setCursor(MARGIN, 20);
-    gfx->print("< ");
-    gfx->print(title);
+// ============================================
+// WEATHER CARD
+// ============================================
+void createWeatherCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("WEATHER");
+  
+  lv_obj_t *tempLabel = lv_label_create(card);
+  lv_label_set_text(tempLabel, "24°C");
+  lv_obj_set_style_text_color(tempLabel, t.text, 0);
+  lv_obj_set_style_text_font(tempLabel, &lv_font_montserrat_48, 0);
+  lv_obj_align(tempLabel, LV_ALIGN_CENTER, 0, -40);
+  
+  lv_obj_t *descLabel = lv_label_create(card);
+  lv_label_set_text(descLabel, "Partly Cloudy");
+  lv_obj_set_style_text_color(descLabel, t.secondary, 0);
+  lv_obj_align(descLabel, LV_ALIGN_CENTER, 0, 20);
+  
+  lv_obj_t *hlLabel = lv_label_create(card);
+  lv_label_set_text(hlLabel, "H: 28°  L: 18°");
+  lv_obj_set_style_text_color(hlLabel, t.text, 0);
+  lv_obj_align(hlLabel, LV_ALIGN_CENTER, 0, 60);
 }
 
-void drawSubClockWorld() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("World Clock");
-    
-    const char* cities[] = {"New York", "London", "Tokyo"};
-    int8_t offsets[] = {-5, 0, 9};
-    
-    for (int i = 0; i < 3; i++) {
-        int16_t y = 80 + i * 90;
-        drawCard(MARGIN, y, LCD_WIDTH - 2*MARGIN, 75, theme->card);
-        
-        gfx->setTextSize(1);
-        gfx->setTextColor(theme->textDim);
-        gfx->setCursor(MARGIN + 15, y + 15);
-        gfx->print(cities[i]);
-        
-        uint8_t h = (clockHour + 24 + offsets[i]) % 24;
-        gfx->setTextSize(3);
-        gfx->setTextColor(theme->text);
-        gfx->setCursor(MARGIN + 15, y + 35);
-        gfx->printf("%02d:%02d", h, clockMinute);
-    }
-    
-    drawNavHint("Swipe up to exit");
+// ============================================
+// QUOTE CARD
+// ============================================
+void createQuoteCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("MOTIVATION");
+  
+  lv_obj_t *quoteIcon = lv_label_create(card);
+  lv_label_set_text(quoteIcon, "\"");
+  lv_obj_set_style_text_color(quoteIcon, t.accent, 0);
+  lv_obj_set_style_text_font(quoteIcon, &lv_font_montserrat_48, 0);
+  lv_obj_align(quoteIcon, LV_ALIGN_TOP_LEFT, 10, 30);
+  
+  lv_obj_t *quoteLabel = lv_label_create(card);
+  lv_label_set_text(quoteLabel, quotes[currentQuote]);
+  lv_obj_set_style_text_color(quoteLabel, t.text, 0);
+  lv_obj_set_width(quoteLabel, LCD_WIDTH - 80);
+  lv_label_set_long_mode(quoteLabel, LV_LABEL_LONG_WRAP);
+  lv_obj_align(quoteLabel, LV_ALIGN_CENTER, 0, 20);
+  
+  lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(card, [](lv_event_t *e) {
+    currentQuote = (currentQuote + 1) % 5;
+    navigateToCard(CARD_QUOTE, 0);
+  }, LV_EVENT_CLICKED, NULL);
 }
 
-void drawSubClockAnalog() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Analog Clock");
-    
-    int16_t cx = LCD_WIDTH / 2;
-    int16_t cy = 230;
-    int16_t r = 120;
-    
-    // Clock face
-    gfx->drawCircle(cx, cy, r, theme->cardLight);
-    gfx->drawCircle(cx, cy, r - 2, theme->cardLight);
-    
-    // Hour markers
-    for (int i = 0; i < 12; i++) {
-        float a = (i * 30 - 90) * DEG_TO_RAD;
-        int16_t x1 = cx + cos(a) * (r - 15);
-        int16_t y1 = cy + sin(a) * (r - 15);
-        int16_t x2 = cx + cos(a) * (r - 5);
-        int16_t y2 = cy + sin(a) * (r - 5);
-        gfx->drawLine(x1, y1, x2, y2, theme->text);
-    }
-    
-    // Hour hand
-    float ha = ((clockHour % 12) * 30 + clockMinute * 0.5 - 90) * DEG_TO_RAD;
-    gfx->drawLine(cx, cy, cx + cos(ha) * 60, cy + sin(ha) * 60, theme->text);
-    gfx->drawLine(cx-1, cy, cx-1 + cos(ha) * 60, cy + sin(ha) * 60, theme->text);
-    
-    // Minute hand
-    float ma = (clockMinute * 6 - 90) * DEG_TO_RAD;
-    gfx->drawLine(cx, cy, cx + cos(ma) * 90, cy + sin(ma) * 90, theme->textDim);
-    
-    // Second hand
-    float sa = (clockSecond * 6 - 90) * DEG_TO_RAD;
-    gfx->drawLine(cx, cy, cx + cos(sa) * 100, cy + sin(sa) * 100, theme->accent1);
-    
-    // Center dot
-    gfx->fillCircle(cx, cy, 5, theme->accent1);
-    
-    drawNavHint("Swipe up to exit");
+// ============================================
+// YES/NO CARD
+// ============================================
+static lv_obj_t *yesNoResultLabel = NULL;
+
+void yesNoCallback(lv_event_t *e) {
+  const char* answers[] = {"YES!", "NO!", "MAYBE...", "ASK AGAIN", "DEFINITELY!", "NEVER!", "100%", "NOPE"};
+  lv_label_set_text(yesNoResultLabel, answers[random(0, 8)]);
 }
 
-void drawSubClockDigital() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Digital Clock");
-    
-    // Large digital time with glow effect
-    gfx->setTextSize(6);
-    gfx->setTextColor(theme->accent1);
-    char timeStr[12];
-    sprintf(timeStr, "%02d:%02d:%02d", clockHour, clockMinute, clockSecond);
-    int16_t tw = strlen(timeStr) * 36;
-    gfx->setCursor((LCD_WIDTH - tw) / 2, 180);
-    gfx->print(timeStr);
-    
-    // Date
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor((LCD_WIDTH - 200) / 2, 260);
-    gfx->printf("%s, %s %d, %d", daysOfWeek[currentDay], monthNames[currentMonth - 1], currentDate, currentYear);
-    
-    drawNavHint("Swipe up to exit");
+void createYesNoCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("YES / NO");
+  
+  yesNoResultLabel = lv_label_create(card);
+  lv_label_set_text(yesNoResultLabel, "?");
+  lv_obj_set_style_text_color(yesNoResultLabel, t.accent, 0);
+  lv_obj_set_style_text_font(yesNoResultLabel, &lv_font_montserrat_48, 0);
+  lv_obj_align(yesNoResultLabel, LV_ALIGN_CENTER, 0, -20);
+  
+  lv_obj_t *askBtn = lv_btn_create(card);
+  lv_obj_set_size(askBtn, 150, 50);
+  lv_obj_align(askBtn, LV_ALIGN_CENTER, 0, 70);
+  lv_obj_set_style_bg_color(askBtn, t.accent, 0);
+  lv_obj_set_style_radius(askBtn, 25, 0);
+  lv_obj_add_event_cb(askBtn, yesNoCallback, LV_EVENT_CLICKED, NULL);
+  
+  lv_obj_t *askLabel = lv_label_create(askBtn);
+  lv_label_set_text(askLabel, "REVEAL");
+  lv_obj_center(askLabel);
 }
 
-void drawSubStepsGraph() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Weekly Steps");
-    
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 280, theme->card);
-    
-    const char* days[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
-    int16_t barW = 35;
-    int16_t chartY = 320;
-    int16_t chartH = 180;
-    
-    for (int i = 0; i < 7; i++) {
-        int16_t barX = MARGIN + 20 + i * (barW + 10);
-        float ratio = (float)stepHistory[i] / 10000.0f;
-        if (ratio > 1.0f) ratio = 1.0f;
-        int16_t barH = (int16_t)(chartH * ratio);
-        
-        uint16_t barColor = (i == 5) ? theme->accent1 : theme->cardLight;
-        gfx->fillRoundRect(barX, chartY - barH, barW, barH, 4, barColor);
-        
-        gfx->setTextSize(1);
-        gfx->setTextColor(theme->textDim);
-        gfx->setCursor(barX + 5, chartY + 10);
-        gfx->print(days[i]);
-    }
-    
-    drawNavHint("Swipe up to exit");
+// ============================================
+// TIMER CARD
+// ============================================
+static lv_obj_t *timerLabel = NULL;
+
+void timerBtnCallback(lv_event_t *e) {
+  lv_obj_t *btn = lv_event_get_target(e);
+  const char *txt = lv_label_get_text(lv_obj_get_child(btn, 0));
+  
+  if (strcmp(txt, LV_SYMBOL_PLAY) == 0) {
+    timerRunning = true;
+    timerStart = millis();
+  } else if (strcmp(txt, LV_SYMBOL_PAUSE) == 0) {
+    timerRunning = false;
+  } else if (strcmp(txt, LV_SYMBOL_REFRESH) == 0) {
+    timerRunning = false;
+    timerDuration = 300000;
+  }
 }
 
-void drawSubStepsCalories() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Calories");
+void createTimerCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("TIMER");
+  
+  unsigned long remaining = timerDuration;
+  if (timerRunning) {
+    unsigned long elapsed = millis() - timerStart;
+    remaining = timerDuration > elapsed ? timerDuration - elapsed : 0;
+  }
+  
+  int mins = (remaining / 60000) % 60;
+  int secs = (remaining / 1000) % 60;
+  char timeBuf[16];
+  snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", mins, secs);
+  
+  timerLabel = lv_label_create(card);
+  lv_label_set_text(timerLabel, timeBuf);
+  lv_obj_set_style_text_color(timerLabel, t.text, 0);
+  lv_obj_set_style_text_font(timerLabel, &lv_font_montserrat_48, 0);
+  lv_obj_align(timerLabel, LV_ALIGN_CENTER, 0, -30);
+  
+  // Controls
+  lv_obj_t *btnContainer = lv_obj_create(card);
+  lv_obj_set_size(btnContainer, 200, 60);
+  lv_obj_align(btnContainer, LV_ALIGN_CENTER, 0, 60);
+  lv_obj_set_style_bg_opa(btnContainer, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(btnContainer, 0, 0);
+  lv_obj_set_flex_flow(btnContainer, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(btnContainer, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  
+  const char *icons[] = {LV_SYMBOL_PLAY, LV_SYMBOL_PAUSE, LV_SYMBOL_REFRESH};
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t *btn = lv_btn_create(btnContainer);
+    lv_obj_set_size(btn, 50, 50);
+    lv_obj_set_style_bg_color(btn, t.accent, 0);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_add_event_cb(btn, timerBtnCallback, LV_EVENT_CLICKED, NULL);
     
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 260, theme->card);
-    
-    // Progress ring
-    int16_t cx = LCD_WIDTH / 2;
-    int16_t cy = 200;
-    float progress = (float)stepCount / stepGoal;
-    drawProgressRing(cx, cy, 70, 12, progress, theme->accent1, theme->cardLight);
-    
-    // Calories in center
-    gfx->setTextSize(3);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(cx - 40, cy - 15);
-    gfx->printf("%.0f", caloriesBurned);
-    gfx->setTextSize(1);
-    gfx->setCursor(cx - 15, cy + 20);
-    gfx->print("kcal");
-    
-    // Total info
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 30, 300);
-    gfx->print("610.5 Total calories today");
-    
-    drawNavHint("Swipe up to exit");
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, icons[i]);
+    lv_obj_center(label);
+  }
 }
 
-void drawSubGamesYesNo() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Yes or No");
+// ============================================
+// DINO GAME CARD
+// ============================================
+void dinoBtnCallback(lv_event_t *e) {
+  if (dinoGameOver) {
+    dinoGameOver = false;
+    dinoScore = 0;
+    obstacleX = LCD_WIDTH;
+  } else if (!dinoJumping) {
+    dinoJumping = true;
+    dinoY = -50;
+  }
+}
+
+void createDinoCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("DINO");
+  
+  // Score
+  char scoreBuf[16];
+  snprintf(scoreBuf, sizeof(scoreBuf), "Score: %d", dinoScore);
+  lv_obj_t *scoreLabel = lv_label_create(card);
+  lv_label_set_text(scoreLabel, scoreBuf);
+  lv_obj_set_style_text_color(scoreLabel, t.text, 0);
+  lv_obj_align(scoreLabel, LV_ALIGN_TOP_RIGHT, -10, 30);
+  
+  // Ground line
+  lv_obj_t *ground = lv_obj_create(card);
+  lv_obj_set_size(ground, LCD_WIDTH - 60, 3);
+  lv_obj_align(ground, LV_ALIGN_BOTTOM_MID, 0, -80);
+  lv_obj_set_style_bg_color(ground, t.secondary, 0);
+  lv_obj_set_style_border_width(ground, 0, 0);
+  
+  // Dino (simple square)
+  lv_obj_t *dino = lv_obj_create(card);
+  lv_obj_set_size(dino, 30, 40);
+  lv_obj_align(dino, LV_ALIGN_BOTTOM_LEFT, 40, -83 + dinoY);
+  lv_obj_set_style_bg_color(dino, t.accent, 0);
+  lv_obj_set_style_radius(dino, 5, 0);
+  lv_obj_set_style_border_width(dino, 0, 0);
+  
+  // Obstacle
+  lv_obj_t *obstacle = lv_obj_create(card);
+  lv_obj_set_size(obstacle, 20, 30);
+  lv_obj_align(obstacle, LV_ALIGN_BOTTOM_LEFT, obstacleX, -83);
+  lv_obj_set_style_bg_color(obstacle, lv_color_hex(0xFF5252), 0);
+  lv_obj_set_style_radius(obstacle, 3, 0);
+  lv_obj_set_style_border_width(obstacle, 0, 0);
+  
+  // Tap to jump
+  lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(card, dinoBtnCallback, LV_EVENT_CLICKED, NULL);
+  
+  if (dinoGameOver) {
+    lv_obj_t *gameOverLabel = lv_label_create(card);
+    lv_label_set_text(gameOverLabel, "GAME OVER\nTap to restart");
+    lv_obj_set_style_text_color(gameOverLabel, lv_color_hex(0xFF5252), 0);
+    lv_obj_set_style_text_align(gameOverLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(gameOverLabel, LV_ALIGN_CENTER, 0, 0);
+  }
+}
+
+// ============================================
+// VOLUME CARD
+// ============================================
+void volumeSliderCallback(lv_event_t *e) {
+  lv_obj_t *slider = lv_event_get_target(e);
+  volumeLevel = lv_slider_get_value(slider);
+}
+
+void createVolumeCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("VOLUME");
+  
+  lv_obj_t *volumeIcon = lv_label_create(card);
+  lv_label_set_text(volumeIcon, LV_SYMBOL_VOLUME_MAX);
+  lv_obj_set_style_text_color(volumeIcon, t.accent, 0);
+  lv_obj_set_style_text_font(volumeIcon, &lv_font_montserrat_48, 0);
+  lv_obj_align(volumeIcon, LV_ALIGN_CENTER, 0, -70);
+  
+  char volBuf[16];
+  snprintf(volBuf, sizeof(volBuf), "%d%%", volumeLevel);
+  lv_obj_t *volLabel = lv_label_create(card);
+  lv_label_set_text(volLabel, volBuf);
+  lv_obj_set_style_text_color(volLabel, t.text, 0);
+  lv_obj_set_style_text_font(volLabel, &lv_font_montserrat_24, 0);
+  lv_obj_align(volLabel, LV_ALIGN_CENTER, 0, -10);
+  
+  lv_obj_t *slider = lv_slider_create(card);
+  lv_obj_set_size(slider, LCD_WIDTH - 100, 20);
+  lv_obj_align(slider, LV_ALIGN_CENTER, 0, 50);
+  lv_slider_set_range(slider, 0, 100);
+  lv_slider_set_value(slider, volumeLevel, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(slider, t.secondary, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(slider, t.accent, LV_PART_INDICATOR);
+  lv_obj_add_event_cb(slider, volumeSliderCallback, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
+// ============================================
+// WORLD CLOCK CARD
+// ============================================
+void createWorldClockCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("WORLD CLOCK");
+  
+  RTC_DateTime now = rtc.getDateTime();
+  
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_set_size(row, LCD_WIDTH - 60, 55);
+    lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 35 + i * 65);
+    lv_obj_set_style_bg_color(row, t.bg, 0);
+    lv_obj_set_style_radius(row, 12, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
     
-    if (yesNoShowing) {
-        // Show result
-        drawCard(MARGIN, 120, LCD_WIDTH - 2*MARGIN, 150, theme->card);
-        gfx->setTextSize(5);
-        gfx->setTextColor(yesNoResult ? theme->success : theme->danger);
-        gfx->setCursor((LCD_WIDTH - 80) / 2, 170);
-        gfx->print(yesNoResult ? "Yes" : "No");
-        
-        drawButton(MARGIN + 60, 310, LCD_WIDTH - 2*MARGIN - 120, 60, "Spin Again", theme->accent1);
+    lv_obj_t *cityLabel = lv_label_create(row);
+    lv_label_set_text(cityLabel, worldCities[i]);
+    lv_obj_set_style_text_color(cityLabel, t.text, 0);
+    lv_obj_align(cityLabel, LV_ALIGN_LEFT_MID, 10, 0);
+    
+    int cityHour = (now.hour + worldOffsets[i] + 24) % 24;
+    char timeBuf[16];
+    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", cityHour, now.minute);
+    lv_obj_t *timeLabel = lv_label_create(row);
+    lv_label_set_text(timeLabel, timeBuf);
+    lv_obj_set_style_text_color(timeLabel, t.accent, 0);
+    lv_obj_set_style_text_font(timeLabel, &lv_font_montserrat_20, 0);
+    lv_obj_align(timeLabel, LV_ALIGN_RIGHT_MID, -10, 0);
+  }
+}
+
+// ============================================
+// CALENDAR CARD
+// ============================================
+void createCalendarCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("CALENDAR");
+  
+  // Month/Year header
+  const char* months[] = {"January", "February", "March", "April", "May", "June",
+                          "July", "August", "September", "October", "November", "December"};
+  char headerBuf[32];
+  snprintf(headerBuf, sizeof(headerBuf), "%s %d", months[currentMonth - 1], currentYear);
+  lv_obj_t *headerLabel = lv_label_create(card);
+  lv_label_set_text(headerLabel, headerBuf);
+  lv_obj_set_style_text_color(headerLabel, t.text, 0);
+  lv_obj_align(headerLabel, LV_ALIGN_TOP_MID, 0, 30);
+  
+  // Day grid (simplified - just numbers)
+  lv_obj_t *grid = lv_obj_create(card);
+  lv_obj_set_size(grid, LCD_WIDTH - 60, 220);
+  lv_obj_align(grid, LV_ALIGN_CENTER, 0, 30);
+  lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(grid, 0, 0);
+  lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+  
+  int daysInMonth = 31;
+  for (int d = 1; d <= daysInMonth; d++) {
+    lv_obj_t *dayObj = lv_obj_create(grid);
+    lv_obj_set_size(dayObj, 38, 30);
+    lv_obj_set_style_border_width(dayObj, 0, 0);
+    
+    if (d == selectedDay) {
+      lv_obj_set_style_bg_color(dayObj, t.accent, 0);
+      lv_obj_set_style_radius(dayObj, 15, 0);
     } else {
-        drawCard(MARGIN, 100, LCD_WIDTH - 2*MARGIN, 100, theme->card);
-        gfx->setTextSize(2);
-        gfx->setTextColor(theme->text);
-        gfx->setCursor(MARGIN + 40, 140);
-        gfx->print("Should I do it?");
-        
-        drawButton(MARGIN + 20, 240, 140, 80, "YES", theme->success);
-        drawButton(MARGIN + 180, 240, 140, 80, "NO", theme->danger);
+      lv_obj_set_style_bg_opa(dayObj, LV_OPA_TRANSP, 0);
     }
     
-    drawNavHint("Swipe up to exit");
+    lv_obj_t *dayLabel = lv_label_create(dayObj);
+    char dayBuf[4];
+    snprintf(dayBuf, sizeof(dayBuf), "%d", d);
+    lv_label_set_text(dayLabel, dayBuf);
+    lv_obj_set_style_text_color(dayLabel, d == selectedDay ? lv_color_hex(0x000000) : t.text, 0);
+    lv_obj_center(dayLabel);
+  }
 }
 
-void drawSubGamesClicker() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Clicker");
-    
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 100, theme->card);
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 30, 100);
-    gfx->print("Score:");
-    gfx->setTextSize(4);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 120, 115);
-    gfx->printf("%lu", clickerScore);
-    
-    // Big click button
-    gfx->fillCircle(LCD_WIDTH / 2, 280, 80, theme->accent4);
-    gfx->setTextSize(3);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(LCD_WIDTH / 2 - 45, 265);
-    gfx->print("CLICK");
-    
-    drawNavHint("Swipe up to exit");
+// ============================================
+// NOTES CARD
+// ============================================
+void createNotesCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("NOTES");
+  
+  char numBuf[16];
+  snprintf(numBuf, sizeof(numBuf), "Note %d/5", currentNote + 1);
+  lv_obj_t *numLabel = lv_label_create(card);
+  lv_label_set_text(numLabel, numBuf);
+  lv_obj_set_style_text_color(numLabel, t.accent, 0);
+  lv_obj_align(numLabel, LV_ALIGN_TOP_MID, 0, 40);
+  
+  lv_obj_t *noteLabel = lv_label_create(card);
+  lv_label_set_text(noteLabel, notes[currentNote]);
+  lv_obj_set_style_text_color(noteLabel, t.text, 0);
+  lv_obj_set_style_text_font(noteLabel, &lv_font_montserrat_18, 0);
+  lv_obj_align(noteLabel, LV_ALIGN_CENTER, 0, 0);
+  
+  lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(card, [](lv_event_t *e) {
+    currentNote = (currentNote + 1) % 5;
+    navigateToCard(CARD_NOTES, 0);
+  }, LV_EVENT_CLICKED, NULL);
 }
 
-void drawSubGamesReaction() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Reaction Test");
+// ============================================
+// TORCH CARD
+// ============================================
+void torchBtnCallback(lv_event_t *e) {
+  torchOn = !torchOn;
+  navigateToCard(CARD_TORCH, 0);
+}
+
+void createTorchCard() {
+  Theme &t = themes[currentTheme];
+  
+  if (torchOn) {
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0xFFFFFF), 0);
+    gfx->setBrightness(255);
     
-    if (reactionWaiting) {
-        if (millis() >= reactionStartTime) {
-            // GO - Green screen
-            gfx->fillRoundRect(MARGIN, 100, LCD_WIDTH - 2*MARGIN, 250, CARD_RADIUS, theme->success);
-            gfx->setTextSize(4);
-            gfx->setTextColor(theme->text);
-            gfx->setCursor(LCD_WIDTH / 2 - 80, 200);
-            gfx->print("TAP NOW!");
-        } else {
-            // Waiting - Red screen
-            gfx->fillRoundRect(MARGIN, 100, LCD_WIDTH - 2*MARGIN, 250, CARD_RADIUS, theme->danger);
-            gfx->setTextSize(2);
-            gfx->setTextColor(theme->text);
-            gfx->setCursor(LCD_WIDTH / 2 - 80, 210);
-            gfx->print("Wait for green...");
-        }
-    } else if (reactionTime > 0) {
-        // Show result
-        drawCard(MARGIN, 100, LCD_WIDTH - 2*MARGIN, 150, theme->card);
-        gfx->setTextSize(2);
-        gfx->setTextColor(theme->textDim);
-        gfx->setCursor(MARGIN + 80, 130);
-        gfx->print("Your time:");
-        gfx->setTextSize(4);
-        gfx->setTextColor(theme->success);
-        gfx->setCursor(MARGIN + 80, 170);
-        gfx->printf("%dms", reactionTime);
-        
-        drawButton(MARGIN + 60, 290, LCD_WIDTH - 2*MARGIN - 120, 60, "Try Again", theme->accent1);
-    } else {
-        // Ready to start
-        drawCard(MARGIN, 100, LCD_WIDTH - 2*MARGIN, 120, theme->card);
-        gfx->setTextSize(2);
-        gfx->setTextColor(theme->text);
-        gfx->setCursor(MARGIN + 80, 150);
-        gfx->print("Tap to start");
-        
-        drawButton(MARGIN + 60, 260, LCD_WIDTH - 2*MARGIN - 120, 80, "START", theme->accent4);
+    lv_obj_t *offBtn = lv_btn_create(lv_scr_act());
+    lv_obj_set_size(offBtn, 150, 60);
+    lv_obj_align(offBtn, LV_ALIGN_BOTTOM_MID, 0, -80);
+    lv_obj_set_style_bg_color(offBtn, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_radius(offBtn, 30, 0);
+    lv_obj_add_event_cb(offBtn, torchBtnCallback, LV_EVENT_CLICKED, NULL);
+    
+    lv_obj_t *offLabel = lv_label_create(offBtn);
+    lv_label_set_text(offLabel, "TURN OFF");
+    lv_obj_set_style_text_color(offLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(offLabel);
+  } else {
+    gfx->setBrightness(brightness);
+    lv_obj_t *card = createCardContainer("TORCH");
+    
+    lv_obj_t *torchIcon = lv_label_create(card);
+    lv_label_set_text(torchIcon, LV_SYMBOL_CHARGE);
+    lv_obj_set_style_text_color(torchIcon, t.secondary, 0);
+    lv_obj_set_style_text_font(torchIcon, &lv_font_montserrat_48, 0);
+    lv_obj_align(torchIcon, LV_ALIGN_CENTER, 0, -40);
+    
+    lv_obj_t *onBtn = lv_btn_create(card);
+    lv_obj_set_size(onBtn, 150, 60);
+    lv_obj_align(onBtn, LV_ALIGN_CENTER, 0, 60);
+    lv_obj_set_style_bg_color(onBtn, t.accent, 0);
+    lv_obj_set_style_radius(onBtn, 30, 0);
+    lv_obj_add_event_cb(onBtn, torchBtnCallback, LV_EVENT_CLICKED, NULL);
+    
+    lv_obj_t *onLabel = lv_label_create(onBtn);
+    lv_label_set_text(onLabel, "TURN ON");
+    lv_obj_center(onLabel);
+  }
+}
+
+// ============================================
+// BATTERY CARD
+// ============================================
+void createBatteryCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("BATTERY");
+  
+  int battPercent = power.getBatteryPercent();
+  bool isCharging = power.isCharging();
+  
+  // Arc
+  lv_obj_t *arc = lv_arc_create(card);
+  lv_obj_set_size(arc, 160, 160);
+  lv_obj_align(arc, LV_ALIGN_CENTER, 0, -20);
+  lv_arc_set_rotation(arc, 270);
+  lv_arc_set_bg_angles(arc, 0, 360);
+  lv_arc_set_value(arc, battPercent);
+  lv_obj_set_style_arc_color(arc, t.secondary, LV_PART_MAIN);
+  
+  lv_color_t arcColor;
+  if (battPercent > 60) arcColor = lv_color_hex(0x4CAF50);
+  else if (battPercent > 20) arcColor = lv_color_hex(0xFF9800);
+  else arcColor = lv_color_hex(0xFF5252);
+  lv_obj_set_style_arc_color(arc, arcColor, LV_PART_INDICATOR);
+  lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+  
+  char battBuf[16];
+  snprintf(battBuf, sizeof(battBuf), "%d%%", battPercent);
+  lv_obj_t *battLabel = lv_label_create(card);
+  lv_label_set_text(battLabel, battBuf);
+  lv_obj_set_style_text_color(battLabel, t.text, 0);
+  lv_obj_set_style_text_font(battLabel, &lv_font_montserrat_36, 0);
+  lv_obj_align(battLabel, LV_ALIGN_CENTER, 0, -20);
+  
+  if (isCharging) {
+    lv_obj_t *chargingLabel = lv_label_create(card);
+    lv_label_set_text(chargingLabel, LV_SYMBOL_CHARGE " Charging");
+    lv_obj_set_style_text_color(chargingLabel, lv_color_hex(0x4CAF50), 0);
+    lv_obj_align(chargingLabel, LV_ALIGN_BOTTOM_MID, 0, -30);
+  }
+}
+
+// ============================================
+// GALLERY CARD
+// ============================================
+void galleryBtnCallback(lv_event_t *e) {
+  int action = (int)(intptr_t)lv_event_get_user_data(e);
+  if (action == 0) { currentPhoto--; if (currentPhoto < 0) currentPhoto = max(0, photoFileCount - 1); }
+  else { currentPhoto++; if (currentPhoto >= photoFileCount) currentPhoto = 0; }
+  navigateToCard(CARD_GALLERY, 0);
+}
+
+void createGalleryCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("GALLERY");
+  
+  if (photoFileCount == 0) {
+    lv_obj_t *noPhotos = lv_label_create(card);
+    lv_label_set_text(noPhotos, "No photos found\n\nPlace files in /Photos");
+    lv_obj_set_style_text_color(noPhotos, t.secondary, 0);
+    lv_obj_set_style_text_align(noPhotos, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(noPhotos, LV_ALIGN_CENTER, 0, 0);
+    return;
+  }
+  
+  lv_obj_t *photoFrame = lv_obj_create(card);
+  lv_obj_set_size(photoFrame, LCD_WIDTH - 80, 180);
+  lv_obj_align(photoFrame, LV_ALIGN_CENTER, 0, -10);
+  lv_obj_set_style_bg_color(photoFrame, t.bg, 0);
+  lv_obj_set_style_radius(photoFrame, 15, 0);
+  lv_obj_set_style_border_color(photoFrame, t.accent, 0);
+  lv_obj_set_style_border_width(photoFrame, 2, 0);
+  
+  lv_obj_t *photoIcon = lv_label_create(photoFrame);
+  lv_label_set_text(photoIcon, LV_SYMBOL_IMAGE);
+  lv_obj_set_style_text_color(photoIcon, t.secondary, 0);
+  lv_obj_set_style_text_font(photoIcon, &lv_font_montserrat_48, 0);
+  lv_obj_center(photoIcon);
+  
+  char countBuf[16];
+  snprintf(countBuf, sizeof(countBuf), "%d / %d", currentPhoto + 1, photoFileCount);
+  lv_obj_t *countLabel = lv_label_create(card);
+  lv_label_set_text(countLabel, countBuf);
+  lv_obj_set_style_text_color(countLabel, t.secondary, 0);
+  lv_obj_align(countLabel, LV_ALIGN_BOTTOM_MID, 0, -30);
+}
+
+// ============================================
+// STOCKS CARD
+// ============================================
+void createStocksCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("STOCKS");
+  
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_set_size(row, LCD_WIDTH - 60, 55);
+    lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 35 + i * 62);
+    lv_obj_set_style_bg_color(row, t.bg, 0);
+    lv_obj_set_style_radius(row, 10, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    
+    lv_obj_t *symLabel = lv_label_create(row);
+    lv_label_set_text(symLabel, stockSymbols[i]);
+    lv_obj_set_style_text_color(symLabel, t.text, 0);
+    lv_obj_align(symLabel, LV_ALIGN_LEFT_MID, 10, 0);
+    
+    char priceBuf[16];
+    snprintf(priceBuf, sizeof(priceBuf), "$%.2f", stockPrices[i]);
+    lv_obj_t *priceLabel = lv_label_create(row);
+    lv_label_set_text(priceLabel, priceBuf);
+    lv_obj_set_style_text_color(priceLabel, t.accent, 0);
+    lv_obj_align(priceLabel, LV_ALIGN_RIGHT_MID, -10, 0);
+  }
+}
+
+// ============================================
+// CRYPTO CARD
+// ============================================
+void createCryptoCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("CRYPTO");
+  
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_set_size(row, LCD_WIDTH - 60, 55);
+    lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 35 + i * 62);
+    lv_obj_set_style_bg_color(row, t.bg, 0);
+    lv_obj_set_style_radius(row, 10, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    
+    lv_obj_t *symLabel = lv_label_create(row);
+    lv_label_set_text(symLabel, cryptoSymbols[i]);
+    lv_obj_set_style_text_color(symLabel, t.text, 0);
+    lv_obj_align(symLabel, LV_ALIGN_LEFT_MID, 10, 0);
+    
+    char priceBuf[16];
+    if (cryptoPrices[i] >= 1000) snprintf(priceBuf, sizeof(priceBuf), "$%.0f", cryptoPrices[i]);
+    else snprintf(priceBuf, sizeof(priceBuf), "$%.2f", cryptoPrices[i]);
+    lv_obj_t *priceLabel = lv_label_create(row);
+    lv_label_set_text(priceLabel, priceBuf);
+    lv_obj_set_style_text_color(priceLabel, lv_color_hex(0xF7931A), 0);
+    lv_obj_align(priceLabel, LV_ALIGN_RIGHT_MID, -10, 0);
+  }
+}
+
+// ============================================
+// THEMES CARD
+// ============================================
+void themeCallback(lv_event_t *e) {
+  currentTheme = (int)(intptr_t)lv_event_get_user_data(e);
+  navigateToCard(CARD_THEMES, 0);
+}
+
+void createThemesCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("THEMES");
+  
+  const char* themeNames[] = {"Dark", "Blue", "Green", "Purple"};
+  lv_color_t themeColors[] = {lv_color_hex(0x00D4FF), lv_color_hex(0x5090D3), lv_color_hex(0x4CAF50), lv_color_hex(0xBB86FC)};
+  
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t *btn = lv_btn_create(card);
+    lv_obj_set_size(btn, LCD_WIDTH - 80, 55);
+    lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, 35 + i * 62);
+    lv_obj_set_style_bg_color(btn, t.bg, 0);
+    lv_obj_set_style_radius(btn, 12, 0);
+    if (i == currentTheme) {
+      lv_obj_set_style_border_color(btn, themeColors[i], 0);
+      lv_obj_set_style_border_width(btn, 2, 0);
     }
+    lv_obj_add_event_cb(btn, themeCallback, LV_EVENT_CLICKED, (void*)(intptr_t)i);
     
-    drawNavHint("Swipe up to exit");
-}
-
-void drawSubGamesDino() {
-    gfx->fillScreen(0x0000);
-    drawSubHeader("Dino Run");
+    lv_obj_t *colorDot = lv_obj_create(btn);
+    lv_obj_set_size(colorDot, 25, 25);
+    lv_obj_align(colorDot, LV_ALIGN_LEFT_MID, 10, 0);
+    lv_obj_set_style_bg_color(colorDot, themeColors[i], 0);
+    lv_obj_set_style_radius(colorDot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(colorDot, 0, 0);
     
-    // Score
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 20, 70);
-    gfx->print("48 lvl");
-    gfx->setCursor(LCD_WIDTH - 100, 70);
-    gfx->printf("Score: %lu", dinoScore);
+    lv_obj_t *nameLabel = lv_label_create(btn);
+    lv_label_set_text(nameLabel, themeNames[i]);
+    lv_obj_set_style_text_color(nameLabel, t.text, 0);
+    lv_obj_align(nameLabel, LV_ALIGN_LEFT_MID, 50, 0);
     
-    // Ground line
-    gfx->drawFastHLine(0, 320, LCD_WIDTH, theme->textDim);
-    
-    // Dino character (simple)
-    int16_t dinoX = 80;
-    int16_t dinoY = dinoJumping ? 240 : 290;
-    
-    // Body
-    gfx->fillRect(dinoX, dinoY, 40, 30, theme->text);
-    // Head
-    gfx->fillRect(dinoX + 25, dinoY - 20, 25, 25, theme->text);
-    // Eye
-    gfx->fillRect(dinoX + 40, dinoY - 15, 5, 5, 0x0000);
-    // Legs
-    gfx->fillRect(dinoX + 5, dinoY + 30, 8, 15, theme->text);
-    gfx->fillRect(dinoX + 25, dinoY + 30, 8, 15, theme->text);
-    
-    drawButton(MARGIN + 60, 360, LCD_WIDTH - 2*MARGIN - 120, 60, "JUMP", theme->cardLight);
-    
-    drawNavHint("Swipe up to exit");
-}
-
-void drawSubStreakDaily() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Daily Goal");
-    
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 260, theme->card);
-    
-    // Progress ring
-    int16_t cx = LCD_WIDTH / 2;
-    int16_t cy = 200;
-    float progress = (float)dailyProgress / 100.0f;
-    drawProgressRing(cx, cy, 70, 12, progress, theme->accent1, theme->cardLight);
-    
-    // Progress text
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(cx - 30, cy - 5);
-    gfx->print("Progress");
-    
-    // Stats below
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 50, 300);
-    gfx->print("1/2");
-    gfx->setCursor(LCD_WIDTH - 80, 300);
-    gfx->print("2/3");
-    
-    drawNavHint("Swipe up to exit");
-}
-
-void drawSubStreakWeekly() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Weekly Overview");
-    
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 200, theme->card);
-    
-    const char* days[] = {"Sat", "Sun", "Mon", "Tue", "Wed", "Thr", "Fri"};
-    
-    for (int i = 0; i < 7; i++) {
-        int16_t x = MARGIN + 25 + i * 45;
-        int16_t y = 150;
-        
-        uint16_t col;
-        char icon;
-        if (dailyGoalMet[i]) {
-            col = theme->success;
-            icon = 'v';
-        } else if (i == 3) {
-            col = theme->accent1;
-            icon = '!';
-        } else {
-            col = theme->cardLight;
-            icon = 'o';
-        }
-        
-        gfx->fillCircle(x + 15, y, 18, col);
-        gfx->setTextSize(2);
-        gfx->setTextColor(theme->text);
-        gfx->setCursor(x + 9, y - 8);
-        gfx->print(icon);
-        
-        gfx->setTextSize(1);
-        gfx->setTextColor(theme->textDim);
-        gfx->setCursor(x + 5, y + 35);
-        gfx->print(days[i]);
+    if (i == currentTheme) {
+      lv_obj_t *checkLabel = lv_label_create(btn);
+      lv_label_set_text(checkLabel, LV_SYMBOL_OK);
+      lv_obj_set_style_text_color(checkLabel, themeColors[i], 0);
+      lv_obj_align(checkLabel, LV_ALIGN_RIGHT_MID, -10, 0);
     }
-    
-    drawNavHint("Swipe up to exit");
+  }
 }
 
-void drawSubFinanceBudget() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Budget Overview");
-    
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 280, theme->card);
-    
-    const char* categories[] = {"Food", "Transport", "Entertainment"};
-    int16_t spent[] = {450, 120, 80};
-    int16_t budget[] = {600, 200, 150};
-    uint16_t colors[] = {theme->accent4, theme->accent1, theme->accent3};
-    
-    for (int i = 0; i < 3; i++) {
-        int16_t y = 110 + i * 80;
-        
-        gfx->setTextSize(1);
-        gfx->setTextColor(theme->text);
-        gfx->setCursor(MARGIN + 20, y);
-        gfx->print(categories[i]);
-        
-        gfx->setTextColor(theme->textDim);
-        gfx->setCursor(LCD_WIDTH - 100, y);
-        gfx->printf("$%d/$%d", spent[i], budget[i]);
-        
-        drawProgressBar(MARGIN + 20, y + 20, LCD_WIDTH - 2*MARGIN - 40, 10, (float)spent[i] / budget[i], colors[i], theme->cardLight);
-    }
-    
-    drawNavHint("Swipe up to exit");
+// ============================================
+// SYSTEM CARD
+// ============================================
+void createSystemCard() {
+  Theme &t = themes[currentTheme];
+  lv_obj_t *card = createCardContainer("SYSTEM");
+  
+  // CPU
+  lv_obj_t *cpuRow = lv_obj_create(card);
+  lv_obj_set_size(cpuRow, LCD_WIDTH - 60, 45);
+  lv_obj_align(cpuRow, LV_ALIGN_TOP_MID, 0, 40);
+  lv_obj_set_style_bg_color(cpuRow, t.bg, 0);
+  lv_obj_set_style_radius(cpuRow, 10, 0);
+  lv_obj_set_style_border_width(cpuRow, 0, 0);
+  
+  lv_obj_t *cpuLabel = lv_label_create(cpuRow);
+  lv_label_set_text(cpuLabel, "CPU");
+  lv_obj_set_style_text_color(cpuLabel, t.secondary, 0);
+  lv_obj_align(cpuLabel, LV_ALIGN_LEFT_MID, 10, 0);
+  
+  lv_obj_t *cpuBar = lv_bar_create(cpuRow);
+  lv_obj_set_size(cpuBar, 120, 12);
+  lv_obj_align(cpuBar, LV_ALIGN_RIGHT_MID, -50, 0);
+  lv_bar_set_value(cpuBar, random(20, 60), LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(cpuBar, t.secondary, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(cpuBar, t.accent, LV_PART_INDICATOR);
+  
+  // RAM
+  lv_obj_t *ramRow = lv_obj_create(card);
+  lv_obj_set_size(ramRow, LCD_WIDTH - 60, 45);
+  lv_obj_align(ramRow, LV_ALIGN_TOP_MID, 0, 95);
+  lv_obj_set_style_bg_color(ramRow, t.bg, 0);
+  lv_obj_set_style_radius(ramRow, 10, 0);
+  lv_obj_set_style_border_width(ramRow, 0, 0);
+  
+  lv_obj_t *ramLabel = lv_label_create(ramRow);
+  lv_label_set_text(ramLabel, "RAM");
+  lv_obj_set_style_text_color(ramLabel, t.secondary, 0);
+  lv_obj_align(ramLabel, LV_ALIGN_LEFT_MID, 10, 0);
+  
+  uint32_t freeHeap = ESP.getFreeHeap() / 1024;
+  uint32_t totalHeap = ESP.getHeapSize() / 1024;
+  int ramPercent = 100 - (freeHeap * 100 / totalHeap);
+  
+  lv_obj_t *ramBar = lv_bar_create(ramRow);
+  lv_obj_set_size(ramBar, 120, 12);
+  lv_obj_align(ramBar, LV_ALIGN_RIGHT_MID, -50, 0);
+  lv_bar_set_value(ramBar, ramPercent, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(ramBar, t.secondary, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(ramBar, lv_color_hex(0x4CAF50), LV_PART_INDICATOR);
+  
+  // Temperature
+  lv_obj_t *tempRow = lv_obj_create(card);
+  lv_obj_set_size(tempRow, LCD_WIDTH - 60, 45);
+  lv_obj_align(tempRow, LV_ALIGN_TOP_MID, 0, 150);
+  lv_obj_set_style_bg_color(tempRow, t.bg, 0);
+  lv_obj_set_style_radius(tempRow, 10, 0);
+  lv_obj_set_style_border_width(tempRow, 0, 0);
+  
+  lv_obj_t *tempLabel = lv_label_create(tempRow);
+  lv_label_set_text(tempLabel, "TEMP");
+  lv_obj_set_style_text_color(tempLabel, t.secondary, 0);
+  lv_obj_align(tempLabel, LV_ALIGN_LEFT_MID, 10, 0);
+  
+  float temp = temperatureRead();
+  char tempBuf[16];
+  snprintf(tempBuf, sizeof(tempBuf), "%.1f°C", temp);
+  lv_obj_t *tempVal = lv_label_create(tempRow);
+  lv_label_set_text(tempVal, tempBuf);
+  lv_obj_set_style_text_color(tempVal, t.accent, 0);
+  lv_obj_align(tempVal, LV_ALIGN_RIGHT_MID, -10, 0);
+  
+  // WiFi status
+  lv_obj_t *wifiRow = lv_obj_create(card);
+  lv_obj_set_size(wifiRow, LCD_WIDTH - 60, 45);
+  lv_obj_align(wifiRow, LV_ALIGN_TOP_MID, 0, 205);
+  lv_obj_set_style_bg_color(wifiRow, t.bg, 0);
+  lv_obj_set_style_radius(wifiRow, 10, 0);
+  lv_obj_set_style_border_width(wifiRow, 0, 0);
+  
+  lv_obj_t *wifiLabel = lv_label_create(wifiRow);
+  lv_label_set_text(wifiLabel, "WiFi");
+  lv_obj_set_style_text_color(wifiLabel, t.secondary, 0);
+  lv_obj_align(wifiLabel, LV_ALIGN_LEFT_MID, 10, 0);
+  
+  lv_obj_t *wifiStatus = lv_label_create(wifiRow);
+  lv_label_set_text(wifiStatus, WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+  lv_obj_set_style_text_color(wifiStatus, WiFi.status() == WL_CONNECTED ? lv_color_hex(0x4CAF50) : lv_color_hex(0xFF5252), 0);
+  lv_obj_align(wifiStatus, LV_ALIGN_RIGHT_MID, -10, 0);
 }
 
-void drawSubFinanceCrypto() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Crypto Watch");
-    
-    // Bitcoin card
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 100, theme->card);
-    gfx->setTextSize(3);
-    gfx->setTextColor(RGB565(247, 147, 26));
-    gfx->setCursor(MARGIN + 20, 100);
-    gfx->print("B");
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 60, 100);
-    gfx->print("Bitcoin");
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 60, 125);
-    gfx->print("BTC");
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(LCD_WIDTH - 130, 100);
-    gfx->printf("$%.0f", btcPrice);
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->success);
-    gfx->setCursor(LCD_WIDTH - 60, 130);
-    gfx->printf("+%.1f%%", btcChange);
-    
-    // Ethereum card
-    drawCard(MARGIN, 200, LCD_WIDTH - 2*MARGIN, 100, theme->card);
-    gfx->setTextSize(3);
-    gfx->setTextColor(RGB565(98, 126, 234));
-    gfx->setCursor(MARGIN + 20, 220);
-    gfx->print("E");
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(MARGIN + 60, 220);
-    gfx->print("Ethereum");
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(MARGIN + 60, 245);
-    gfx->print("ETH");
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(LCD_WIDTH - 110, 220);
-    gfx->printf("$%.0f", ethPrice);
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->danger);
-    gfx->setCursor(LCD_WIDTH - 60, 250);
-    gfx->printf("%.1f%%", ethChange);
-    
-    drawNavHint("Swipe up to exit");
-}
-
-void drawSubSystemBattery() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Battery");
-    
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 260, theme->card);
-    
-    // Large battery ring
-    int16_t cx = LCD_WIDTH / 2;
-    int16_t cy = 200;
-    drawProgressRing(cx, cy, 70, 12, (float)batteryPercent / 100.0f, theme->success, theme->cardLight);
-    
-    gfx->setTextSize(4);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(cx - 35, cy - 15);
-    gfx->printf("%d%%", batteryPercent);
-    
-    // Info
-    gfx->setTextSize(1);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor((LCD_WIDTH - 150) / 2, 310);
-    gfx->print("Estimated: 5h 30m remaining");
-    
-    drawNavHint("Swipe up to exit");
-}
-
-void drawSubTimerStopwatch() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Stopwatch");
-    
-    // Time display
-    uint32_t totalSeconds = stopwatchMs / 1000;
-    uint8_t minutes = totalSeconds / 60;
-    uint8_t seconds = totalSeconds % 60;
-    uint8_t ms = (stopwatchMs % 1000) / 10;
-    
-    gfx->setTextSize(5);
-    gfx->setTextColor(theme->accent1);
-    gfx->setCursor((LCD_WIDTH - 200) / 2, 180);
-    gfx->printf("%02d:%02d", minutes, seconds);
-    gfx->setTextSize(3);
-    gfx->setCursor((LCD_WIDTH + 100) / 2, 190);
-    gfx->printf(".%02d", ms);
-    
-    // Controls
-    if (stopwatchRunning) {
-        drawButton(MARGIN + 30, 290, 140, 60, "STOP", theme->danger);
-    } else {
-        drawButton(MARGIN + 30, 290, 140, 60, "START", theme->success);
-    }
-    drawButton(MARGIN + 190, 290, 120, 60, "RESET", theme->cardLight);
-    
-    drawNavHint("Swipe up to exit");
-}
-
-void drawSubTimerPomodoro() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Pomodoro");
-    
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 240, theme->card);
-    
-    // Time ring
-    int16_t cx = LCD_WIDTH / 2;
-    int16_t cy = 190;
-    drawProgressRing(cx, cy, 70, 10, 1.0f, theme->danger, theme->cardLight);
-    
-    gfx->setTextSize(4);
-    gfx->setTextColor(theme->text);
-    gfx->setCursor(cx - 40, cy - 15);
-    gfx->printf("%d:00", pomodoroMinutes);
-    
-    // Duration options
-    int16_t btnY = 330;
-    uint8_t durations[] = {15, 25, 45};
-    for (int i = 0; i < 3; i++) {
-        int16_t x = MARGIN + 30 + i * 110;
-        uint16_t col = (pomodoroMinutes == durations[i]) ? theme->accent1 : theme->cardLight;
-        gfx->fillRoundRect(x, btnY, 80, 40, 8, col);
-        gfx->setTextSize(2);
-        gfx->setTextColor(theme->text);
-        gfx->setCursor(x + 20, btnY + 10);
-        gfx->printf("%dm", durations[i]);
-    }
-    
-    drawNavHint("Swipe up to exit");
-}
-
-void drawSubSettingsTheme() {
-    gfx->fillScreen(theme->bg);
-    drawSubHeader("Theme");
-    
-    for (int i = 0; i < THEME_COUNT; i++) {
-        int16_t x = MARGIN + (i % 2) * 170;
-        int16_t y = 80 + (i / 2) * 100;
-        
-        uint16_t borderCol = (i == currentTheme) ? themes[i].accent1 : themes[i].card;
-        gfx->drawRoundRect(x, y, 150, 85, 12, borderCol);
-        gfx->fillRoundRect(x + 2, y + 2, 146, 81, 10, themes[i].bg);
-        
-        gfx->setTextSize(1);
-        gfx->setTextColor(themes[i].text);
-        gfx->setCursor(x + 15, y + 20);
-        gfx->print(themes[i].name);
-        
-        // Color dots
-        gfx->fillCircle(x + 30, y + 55, 8, themes[i].accent1);
-        gfx->fillCircle(x + 55, y + 55, 8, themes[i].accent2);
-        gfx->fillCircle(x + 80, y + 55, 8, themes[i].accent3);
-    }
-    
-    drawNavHint("Tap to select, swipe up to exit");
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  GESTURE DETECTION
-// ═══════════════════════════════════════════════════════════════════════════
-
-GestureType detectGesture() {
-    if (gestureStartX < 0 || gestureEndX < 0) return GESTURE_NONE;
-    
-    int16_t dx = gestureEndX - gestureStartX;
-    int16_t dy = gestureEndY - gestureStartY;
-    unsigned long dt = millis() - gestureStartTime;
-    
-    // Check for long press
-    if (dt > LONG_PRESS_TIME && abs(dx) < 20 && abs(dy) < 20) {
-        return GESTURE_LONG_PRESS;
-    }
-    
-    // Check for tap
-    if (dt < 200 && abs(dx) < 20 && abs(dy) < 20) {
-        return GESTURE_TAP;
-    }
-    
-    if (abs(dx) > abs(dy)) {
-        if (abs(dx) > SWIPE_THRESHOLD) {
-            return (dx > 0) ? GESTURE_RIGHT : GESTURE_LEFT;
-        }
-    } else {
-        if (abs(dy) > SWIPE_THRESHOLD) {
-            return (dy > 0) ? GESTURE_DOWN : GESTURE_UP;
-        }
-    }
-    
-    return GESTURE_NONE;
-}
-
-SubCard getFirstSubCard(MainCard card) {
-    switch (card) {
-        case CARD_CLOCK: return SUB_CLOCK_WORLD;
-        case CARD_STEPS: return SUB_STEPS_GRAPH;
-        case CARD_MUSIC: return SUB_MUSIC_PLAYLIST;
-        case CARD_WEATHER: return SUB_WEATHER_FORECAST;
-        case CARD_CALENDAR: return SUB_CALENDAR_EVENTS;
-        case CARD_GAMES: return SUB_GAMES_YESNO;
-        case CARD_STREAK: return SUB_STREAK_DAILY;
-        case CARD_FINANCE: return SUB_FINANCE_BUDGET;
-        case CARD_SYSTEM: return SUB_SYSTEM_STATS;
-        case CARD_TIMER: return SUB_TIMER_STOPWATCH;
-        case CARD_SETTINGS: return SUB_SETTINGS_THEME;
-        default: return SUB_NONE;
-    }
-}
-
-SubCard getNextSubCard(SubCard current, MainCard mainCard, bool forward) {
-    int delta = forward ? 1 : -1;
-    int base, count;
-    
-    switch (mainCard) {
-        case CARD_CLOCK: base = SUB_CLOCK_WORLD; count = 4; break;
-        case CARD_STEPS: base = SUB_STEPS_GRAPH; count = 4; break;
-        case CARD_MUSIC: base = SUB_MUSIC_PLAYLIST; count = 3; break;
-        case CARD_WEATHER: base = SUB_WEATHER_FORECAST; count = 3; break;
-        case CARD_CALENDAR: base = SUB_CALENDAR_EVENTS; count = 3; break;
-        case CARD_GAMES: base = SUB_GAMES_YESNO; count = 4; break;
-        case CARD_STREAK: base = SUB_STREAK_DAILY; count = 3; break;
-        case CARD_FINANCE: base = SUB_FINANCE_BUDGET; count = 3; break;
-        case CARD_SYSTEM: base = SUB_SYSTEM_STATS; count = 4; break;
-        case CARD_TIMER: base = SUB_TIMER_STOPWATCH; count = 3; break;
-        case CARD_SETTINGS: base = SUB_SETTINGS_THEME; count = 4; break;
-        default: return SUB_NONE;
-    }
-    
-    int currentIdx = current - base;
-    int newIdx = (currentIdx + delta + count) % count;
-    return (SubCard)(base + newIdx);
-}
-
-void handleGesture(GestureType gesture) {
-    if (gesture == GESTURE_NONE) return;
-    
-    if (gesture == GESTURE_LONG_PRESS) {
-        // Open theme selector
-        currentSubCard = SUB_SETTINGS_THEME;
-        redrawNeeded = true;
-        return;
-    }
-    
-    if (currentSubCard == SUB_NONE) {
-        switch (gesture) {
-            case GESTURE_LEFT:
-                currentMainCard = (MainCard)((currentMainCard + 1) % MAIN_CARD_COUNT);
-                redrawNeeded = true;
-                break;
-            case GESTURE_RIGHT:
-                currentMainCard = (MainCard)((currentMainCard + MAIN_CARD_COUNT - 1) % MAIN_CARD_COUNT);
-                redrawNeeded = true;
-                break;
-            case GESTURE_DOWN:
-                subCardIndex = 0;
-                currentSubCard = getFirstSubCard(currentMainCard);
-                redrawNeeded = true;
-                break;
-            default:
-                break;
-        }
-    } else {
-        if (gesture == GESTURE_UP) {
-            currentSubCard = SUB_NONE;
-            subCardIndex = 0;
-            redrawNeeded = true;
-        } else if (gesture == GESTURE_LEFT) {
-            currentSubCard = getNextSubCard(currentSubCard, currentMainCard, true);
-            redrawNeeded = true;
-        } else if (gesture == GESTURE_RIGHT) {
-            currentSubCard = getNextSubCard(currentSubCard, currentMainCard, false);
-            redrawNeeded = true;
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  TOUCH HANDLING
-// ═══════════════════════════════════════════════════════════════════════════
-
-bool inRect(int16_t rx, int16_t ry, int16_t rw, int16_t rh) {
-    return touchX >= rx && touchX <= rx+rw && touchY >= ry && touchY <= ry+rh;
-}
-
-void handleTouch() {
-    bool t = touch.touched();
-    
-    if (t && !lastTouchState) {
-        touch.getPoint(&gestureStartX, &gestureStartY);
-        gestureInProgress = true;
-        gestureStartTime = millis();
-    } else if (!t && lastTouchState && gestureInProgress) {
-        touch.getPoint(&gestureEndX, &gestureEndY);
-        touchX = gestureEndX;
-        touchY = gestureEndY;
-        
-        if (millis() - gestureStartTime < SWIPE_TIMEOUT) {
-            GestureType gesture = detectGesture();
-            
-            if (gesture == GESTURE_TAP) {
-                // Handle button taps
-                if (currentSubCard == SUB_GAMES_CLICKER) {
-                    if (inRect(LCD_WIDTH/2 - 80, 200, 160, 160)) {
-                        clickerScore++;
-                        redrawNeeded = true;
-                    }
-                } else if (currentSubCard == SUB_GAMES_REACTION) {
-                    if (!reactionWaiting && reactionTime == 0) {
-                        if (inRect(MARGIN + 60, 260, LCD_WIDTH - 2*MARGIN - 120, 80)) {
-                            reactionWaiting = true;
-                            reactionStartTime = millis() + random(1000, 3000);
-                            redrawNeeded = true;
-                        }
-                    } else if (reactionWaiting && millis() >= reactionStartTime) {
-                        reactionTime = millis() - reactionStartTime;
-                        reactionWaiting = false;
-                        redrawNeeded = true;
-                    } else if (reactionTime > 0) {
-                        if (inRect(MARGIN + 60, 290, LCD_WIDTH - 2*MARGIN - 120, 60)) {
-                            reactionTime = 0;
-                            redrawNeeded = true;
-                        }
-                    }
-                } else if (currentSubCard == SUB_GAMES_YESNO) {
-                    if (!yesNoShowing) {
-                        if (inRect(MARGIN + 20, 240, 140, 80)) {
-                            yesNoResult = true;
-                            yesNoShowing = true;
-                            redrawNeeded = true;
-                        } else if (inRect(MARGIN + 180, 240, 140, 80)) {
-                            yesNoResult = false;
-                            yesNoShowing = true;
-                            redrawNeeded = true;
-                        }
-                    } else {
-                        if (inRect(MARGIN + 60, 310, LCD_WIDTH - 2*MARGIN - 120, 60)) {
-                            yesNoShowing = false;
-                            redrawNeeded = true;
-                        }
-                    }
-                } else if (currentSubCard == SUB_GAMES_DINO) {
-                    if (inRect(MARGIN + 60, 360, LCD_WIDTH - 2*MARGIN - 120, 60)) {
-                        dinoJumping = true;
-                        dinoScore++;
-                        redrawNeeded = true;
-                    }
-                } else if (currentSubCard == SUB_TIMER_STOPWATCH) {
-                    if (inRect(MARGIN + 30, 290, 140, 60)) {
-                        stopwatchRunning = !stopwatchRunning;
-                        redrawNeeded = true;
-                    } else if (inRect(MARGIN + 190, 290, 120, 60)) {
-                        stopwatchMs = 0;
-                        stopwatchRunning = false;
-                        redrawNeeded = true;
-                    }
-                } else if (currentSubCard == SUB_SETTINGS_THEME) {
-                    // Theme selection
-                    for (int i = 0; i < THEME_COUNT; i++) {
-                        int16_t x = MARGIN + (i % 2) * 170;
-                        int16_t y = 80 + (i / 2) * 100;
-                        if (inRect(x, y, 150, 85)) {
-                            currentTheme = (ThemeType)i;
-                            theme = &themes[currentTheme];
-                            prefs.putUInt("theme", currentTheme);
-                            redrawNeeded = true;
-                            break;
-                        }
-                    }
-                } else if (currentMainCard == CARD_MUSIC && currentSubCard == SUB_NONE) {
-                    int16_t cx = LCD_WIDTH / 2;
-                    if (inRect(cx - 28, 230 - 28, 56, 56)) {
-                        musicPlaying = !musicPlaying;
-                        redrawNeeded = true;
-                    }
-                }
-            } else {
-                handleGesture(gesture);
-            }
-        }
-        
-        gestureInProgress = false;
-        gestureStartX = gestureStartY = gestureEndX = gestureEndY = -1;
-    }
-    
-    lastTouchState = t;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  BACKGROUND SERVICES
-// ═══════════════════════════════════════════════════════════════════════════
-
-void serviceClock() {
-    if (millis() - lastClockUpdate >= 1000) {
-        lastClockUpdate = millis();
-        if (hasRTC) {
-            rtc.getTime(&clockHour, &clockMinute, &clockSecond);
-        } else {
-            clockSecond++;
-            if (clockSecond >= 60) { clockSecond = 0; clockMinute++; }
-            if (clockMinute >= 60) { clockMinute = 0; clockHour++; }
-            if (clockHour >= 24) clockHour = 0;
-        }
-        if ((currentMainCard == CARD_CLOCK || currentMainCard == CARD_TIMER) && currentSubCard == SUB_NONE) {
-            redrawNeeded = true;
-        }
-        if (currentSubCard >= SUB_CLOCK_WORLD && currentSubCard <= SUB_CLOCK_ALARM) {
-            redrawNeeded = true;
-        }
-    }
-}
-
-void serviceSteps() {
-    if (!hasIMU) return;
-    if (millis() - lastStepUpdate >= 50) {
-        lastStepUpdate = millis();
-        float ax, ay, az;
-        imu.getAccel(&ax, &ay, &az);
-        float mag = sqrt(ax*ax + ay*ay + az*az);
-        
-        static float pm = 1.0f, ppm = 1.0f;
-        static unsigned long lst = 0;
-        
-        if (pm > ppm && pm > mag && pm > 1.3f && millis() - lst > 300) {
-            stepCount++;
-            stepHistory[5] = stepCount;
-            caloriesBurned = stepCount * 0.05;
-            distanceKm = stepCount * 0.0007;
-            lst = millis();
-            if (currentMainCard == CARD_STEPS) redrawNeeded = true;
-        }
-        ppm = pm; pm = mag;
-    }
-}
-
-void serviceBattery() {
-    if (!hasPMU) return;
-    if (millis() - lastBatteryUpdate >= 5000) {
-        lastBatteryUpdate = millis();
-        batteryVoltage = pmu.getBattVoltage();
-        batteryPercent = pmu.getBattPercent();
-    }
-}
-
-void serviceMusic() {
-    if (musicPlaying && millis() - lastMusicUpdate >= 1000) {
-        lastMusicUpdate = millis();
-        musicCurrent++;
-        if (musicCurrent >= musicDuration) {
-            musicCurrent = 0;
-            musicPlaying = false;
-        }
-        if (currentMainCard == CARD_MUSIC) redrawNeeded = true;
-    }
-}
-
-void serviceGames() {
-    if (millis() - lastGameRotate >= 300000) {
-        lastGameRotate = millis();
-        spotlightGame = (spotlightGame + 1) % 4;
-        if (currentMainCard == CARD_GAMES && currentSubCard == SUB_NONE) {
-            redrawNeeded = true;
-        }
-    }
-    
-    if (reactionWaiting && millis() >= reactionStartTime && currentSubCard == SUB_GAMES_REACTION) {
-        redrawNeeded = true;
-    }
-    
-    // Reset dino jump
-    if (dinoJumping) {
-        static unsigned long jumpStart = 0;
-        if (jumpStart == 0) jumpStart = millis();
-        if (millis() - jumpStart > 300) {
-            dinoJumping = false;
-            jumpStart = 0;
-            redrawNeeded = true;
-        }
-    }
-}
-
-void serviceStats() {
-    if (millis() - lastStatsUpdate >= 2000) {
-        lastStatsUpdate = millis();
-        cpuUsage = random(30, 70);
-        temperature = 40.0f + random(0, 50) / 10.0f;
-        freeRAM = ESP.getFreeHeap();
-        if (currentMainCard == CARD_SYSTEM) redrawNeeded = true;
-    }
-}
-
-void serviceStopwatch() {
-    if (stopwatchRunning) {
-        unsigned long now = millis();
-        if (now - lastStopwatchUpdate >= 10) {
-            stopwatchMs += (now - lastStopwatchUpdate);
-            lastStopwatchUpdate = now;
-            if (currentSubCard == SUB_TIMER_STOPWATCH) redrawNeeded = true;
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  RENDERING
-// ═══════════════════════════════════════════════════════════════════════════
-
-void renderScreen() {
-    if (!redrawNeeded) return;
-    
-    if (currentSubCard == SUB_NONE) {
-        switch (currentMainCard) {
-            case CARD_CLOCK:   drawMainClock();    break;
-            case CARD_STEPS:   drawMainSteps();    break;
-            case CARD_MUSIC:   drawMainMusic();    break;
-            case CARD_WEATHER: drawMainWeather();  break;
-            case CARD_CALENDAR: drawMainCalendar(); break;
-            case CARD_GAMES:   drawMainGames();    break;
-            case CARD_STREAK:  drawMainStreak();   break;
-            case CARD_FINANCE: drawMainFinance();  break;
-            case CARD_SYSTEM:  drawMainSystem();   break;
-            case CARD_TIMER:   drawMainTimer();    break;
-            case CARD_SETTINGS: drawMainSettings(); break;
-        }
-    } else {
-        switch (currentSubCard) {
-            case SUB_CLOCK_WORLD:    drawSubClockWorld();    break;
-            case SUB_CLOCK_ANALOG:   drawSubClockAnalog();   break;
-            case SUB_CLOCK_DIGITAL:  drawSubClockDigital();  break;
-            case SUB_STEPS_GRAPH:    drawSubStepsGraph();    break;
-            case SUB_STEPS_CALORIES: drawSubStepsCalories(); break;
-            case SUB_GAMES_YESNO:    drawSubGamesYesNo();    break;
-            case SUB_GAMES_CLICKER:  drawSubGamesClicker();  break;
-            case SUB_GAMES_REACTION: drawSubGamesReaction(); break;
-            case SUB_GAMES_DINO:     drawSubGamesDino();     break;
-            case SUB_STREAK_DAILY:   drawSubStreakDaily();   break;
-            case SUB_STREAK_WEEKLY:  drawSubStreakWeekly();  break;
-            case SUB_FINANCE_BUDGET: drawSubFinanceBudget(); break;
-            case SUB_FINANCE_CRYPTO: drawSubFinanceCrypto(); break;
-            case SUB_SYSTEM_BATTERY: drawSubSystemBattery(); break;
-            case SUB_TIMER_STOPWATCH: drawSubTimerStopwatch(); break;
-            case SUB_TIMER_POMODORO: drawSubTimerPomodoro(); break;
-            case SUB_SETTINGS_THEME: drawSubSettingsTheme(); break;
-            default: break;
-        }
-    }
-    
-    redrawNeeded = false;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  SETUP
-// ═══════════════════════════════════════════════════════════════════════════
-
-void setup() {
-    Serial.begin(115200);
+// ============================================
+// SETUP WIFI
+// ============================================
+void setupWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
-    
-    Serial.println("\n═══════════════════════════════════════════");
-    Serial.println("  S3 MiniOS v2.0 - Multi-Theme Card OS");
-    Serial.println("═══════════════════════════════════════════\n");
-    
-    Wire.begin(IIC_SDA, IIC_SCL);
-    Wire.setClock(400000);
-    Serial.println("[OK] I2C Bus");
-    
-    // Load saved theme
-    prefs.begin("minios", false);
-    currentTheme = (ThemeType)prefs.getUInt("theme", THEME_AMOLED);
-    if (currentTheme >= THEME_COUNT) currentTheme = THEME_AMOLED;
-    theme = &themes[currentTheme];
-    Serial.printf("[OK] Theme: %s\n", theme->name);
-    
-    if (expander.begin(XCA9554_ADDR)) {
-        expander.pinMode(0, OUTPUT);
-        expander.pinMode(1, OUTPUT);
-        expander.pinMode(2, OUTPUT);
-        expander.digitalWrite(0, LOW);
-        expander.digitalWrite(1, LOW);
-        expander.digitalWrite(2, LOW);
-        delay(20);
-        expander.digitalWrite(0, HIGH);
-        expander.digitalWrite(1, HIGH);
-        expander.digitalWrite(2, HIGH);
-        delay(50);
-        Serial.println("[OK] I/O Expander");
-    }
-    
-    gfx->begin();
-    gfx->fillScreen(theme->bg);
-    for (int i = 0; i <= 255; i += 5) { gfx->setBrightness(i); delay(2); }
-    Serial.println("[OK] AMOLED Display");
-    
-    // Splash screen
-    gfx->setTextSize(4);
-    gfx->setTextColor(theme->accent1);
-    gfx->setCursor(70, 160);
-    gfx->print("S3 MiniOS");
-    gfx->setTextSize(2);
-    gfx->setTextColor(theme->textDim);
-    gfx->setCursor(80, 220);
-    gfx->print("Multi-Theme Card OS");
-    gfx->setTextSize(1);
-    gfx->setCursor(140, 270);
-    gfx->print("v2.0 Loading...");
-    
-    if (touch.begin()) Serial.println("[OK] Touch Controller");
-    hasRTC = rtc.begin(); 
-    if (hasRTC) { 
-        Serial.println("[OK] RTC"); 
-        rtc.getTime(&clockHour, &clockMinute, &clockSecond); 
-    }
-    hasPMU = pmu.begin(); 
-    if (hasPMU) { 
-        Serial.println("[OK] PMU"); 
-        batteryPercent = pmu.getBattPercent(); 
-        batteryVoltage = pmu.getBattVoltage(); 
-    }
-    hasIMU = imu.begin(); 
-    if (hasIMU) Serial.println("[OK] IMU");
-    
-    freeRAM = ESP.getFreeHeap();
-    
-    delay(2000);
-    
-    Serial.println("\n═══════════════════════════════════════════");
-    Serial.println("  System Ready - Swipe to Navigate");
-    Serial.println("  Long press for Theme Selector");
-    Serial.println("═══════════════════════════════════════════\n");
-    
-    redrawNeeded = true;
+    attempts++;
+  }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  MAIN LOOP
-// ═══════════════════════════════════════════════════════════════════════════
+// ============================================
+// LOAD SD CARD CONTENT
+// ============================================
+void loadSDCardContent() {
+  SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
+  
+  if (!SD_MMC.begin("/sdcard", true)) return;
+  
+  File musicDir = SD_MMC.open("/Music");
+  if (musicDir && musicDir.isDirectory()) {
+    File file = musicDir.openNextFile();
+    while (file && musicFileCount < 20) {
+      if (!file.isDirectory()) {
+        musicFiles[musicFileCount++] = String(file.name());
+      }
+      file = musicDir.openNextFile();
+    }
+  }
+  
+  File photoDir = SD_MMC.open("/Photos");
+  if (photoDir && photoDir.isDirectory()) {
+    File file = photoDir.openNextFile();
+    while (file && photoFileCount < 50) {
+      if (!file.isDirectory()) {
+        photoFiles[photoFileCount++] = String(file.name());
+      }
+      file = photoDir.openNextFile();
+    }
+  }
+}
+
+// ============================================
+// SETUP
+// ============================================
+void setup() {
+  USBSerial.begin(115200);
+  
+  Wire.begin(IIC_SDA, IIC_SCL);
+  
+  if (expander.begin(0x20)) {
+    expander.pinMode(0, OUTPUT);
+    expander.pinMode(1, OUTPUT);
+    expander.pinMode(2, OUTPUT);
+    expander.digitalWrite(0, LOW);
+    expander.digitalWrite(1, LOW);
+    expander.digitalWrite(2, LOW);
+    delay(20);
+    expander.digitalWrite(0, HIGH);
+    expander.digitalWrite(1, HIGH);
+    expander.digitalWrite(2, HIGH);
+  }
+  
+  power.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL);
+  power.enableBattDetection();
+  power.enableBattVoltageMeasure();
+  
+  rtc.begin(Wire, PCF85063_SLAVE_ADDRESS, IIC_SDA, IIC_SCL);
+  
+  if (qmi.begin(Wire, QMI8658_L_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
+    qmi.configAccelerometer(SensorQMI8658::ACC_RANGE_4G, SensorQMI8658::ACC_ODR_1000Hz, SensorQMI8658::LPF_MODE_0);
+    qmi.enableAccelerometer();
+  }
+  
+  while (FT3168->begin() == false) delay(1000);
+  
+  gfx->begin();
+  gfx->setBrightness(brightness);
+  
+  lv_init();
+  
+  buf1 = (lv_color_t *)heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  buf2 = (lv_color_t *)heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT / 4 * sizeof(lv_color_t), MALLOC_CAP_DMA);
+  
+  lv_disp_draw_buf_init(&draw_buf, buf1, buf2, LCD_WIDTH * LCD_HEIGHT / 4);
+  
+  static lv_disp_drv_t disp_drv;
+  lv_disp_drv_init(&disp_drv);
+  disp_drv.hor_res = LCD_WIDTH;
+  disp_drv.ver_res = LCD_HEIGHT;
+  disp_drv.flush_cb = my_disp_flush;
+  disp_drv.draw_buf = &draw_buf;
+  lv_disp_drv_register(&disp_drv);
+  
+  static lv_indev_drv_t indev_drv;
+  lv_indev_drv_init(&indev_drv);
+  indev_drv.type = LV_INDEV_TYPE_POINTER;
+  indev_drv.read_cb = my_touchpad_read;
+  lv_indev_drv_register(&indev_drv);
+  
+  FT3168->IIC_Write_Device_State(FT3168->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
+                                 FT3168->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_MONITOR);
+  
+  const esp_timer_create_args_t lvgl_tick_timer_args = {
+    .callback = &example_increase_lvgl_tick,
+    .name = "lvgl_tick"
+  };
+  
+  esp_timer_handle_t lvgl_tick_timer = NULL;
+  esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer);
+  esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
+  
+  setupWiFi();
+  loadSDCardContent();
+  
+  navigateToCard(CARD_CLOCK, 0);
+}
+
+// ============================================
+// LOOP
+// ============================================
+unsigned long lastUIUpdate = 0;
+unsigned long lastStepCheck = 0;
+unsigned long lastDinoUpdate = 0;
+float lastAccMagnitude = 0;
 
 void loop() {
-    serviceClock();
-    serviceSteps();
-    serviceBattery();
-    serviceMusic();
-    serviceGames();
-    serviceStats();
-    serviceStopwatch();
-    handleTouch();
-    renderScreen();
+  lv_timer_handler();
+  delay(5);
+  
+  // UI updates
+  if (millis() - lastUIUpdate > 1000) {
+    lastUIUpdate = millis();
     
-    delay(10);
+    if (currentMainCard == CARD_CLOCK && currentSubCard == 0 && clockTimeLabel) {
+      RTC_DateTime datetime = rtc.getDateTime();
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", datetime.hour, datetime.minute);
+      lv_label_set_text(clockTimeLabel, timeBuf);
+    }
+    
+    if (timerRunning && timerLabel) {
+      unsigned long elapsed = millis() - timerStart;
+      unsigned long remaining = timerDuration > elapsed ? timerDuration - elapsed : 0;
+      int mins = (remaining / 60000) % 60;
+      int secs = (remaining / 1000) % 60;
+      char buf[16];
+      snprintf(buf, sizeof(buf), "%02d:%02d", mins, secs);
+      lv_label_set_text(timerLabel, buf);
+    }
+  }
+  
+  // Step counting
+  if (millis() - lastStepCheck > 50) {
+    lastStepCheck = millis();
+    
+    if (qmi.getDataReady()) {
+      qmi.getAccelerometer(acc.x, acc.y, acc.z);
+      
+      float magnitude = sqrt(acc.x * acc.x + acc.y * acc.y + acc.z * acc.z);
+      float delta = abs(magnitude - lastAccMagnitude);
+      
+      if (delta > 0.5 && delta < 3.0) {
+        stepCount++;
+        totalDistance = stepCount * 0.0007;
+        totalCalories = stepCount * 0.04;
+      }
+      
+      lastAccMagnitude = magnitude;
+      
+      // Update compass heading from magnetometer (simplified)
+      compassHeading = fmod(compassHeading + 0.5, 360.0);
+      
+      // Sleep movement tracking
+      if (sleepTrackingActive && millis() - lastMovementSample > 60000) {
+        lastMovementSample = millis();
+        int movementLevel = (int)(delta * 30);
+        if (movementLevel > 100) movementLevel = 100;
+        if (movementIndex < 24) movementData[movementIndex++] = movementLevel;
+      }
+    }
+  }
+  
+  // Dino game update
+  if (currentMainCard == CARD_DINO && !dinoGameOver) {
+    if (millis() - lastDinoUpdate > 50) {
+      lastDinoUpdate = millis();
+      
+      obstacleX -= 8;
+      if (obstacleX < -20) {
+        obstacleX = LCD_WIDTH;
+        dinoScore++;
+      }
+      
+      if (dinoJumping) {
+        dinoY += 10;
+        if (dinoY >= 0) {
+          dinoY = 0;
+          dinoJumping = false;
+        }
+      }
+      
+      // Collision detection
+      if (obstacleX < 70 && obstacleX > 20 && dinoY > -30) {
+        dinoGameOver = true;
+      }
+      
+      navigateToCard(CARD_DINO, 0);
+    }
+  }
 }
