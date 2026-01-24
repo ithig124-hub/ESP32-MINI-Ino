@@ -2,11 +2,7 @@
  * ESP32-S3 Touch AMOLED 1.8" Mini OS
  * Professional LVGL-based firmware with swipe navigation
  * 
- * 23 Total Cards:
- * Clock, Activity Rings, Steps, Workout, Sleep, Streak, Daily Goal,
- * Music, Weather, Quote, Yes/No Spinner, Timer, Dino Game, Volume,
- * World Clock, Calendar, Notes, Torch, Battery, Gallery, Stocks,
- * Themes, System, Compass
+ * 24 Total Cards with swipe navigation
  */
 
 // ============================================
@@ -33,6 +29,13 @@
 // ============================================
 const char* WIFI_SSID = "Optus_9D2E3D";
 const char* WIFI_PASSWORD = "snucktemptGLeQU";
+
+// ============================================
+// I2C ADDRESSES
+// ============================================
+#ifndef PCF85063_SLAVE_ADDRESS
+#define PCF85063_SLAVE_ADDRESS 0x51
+#endif
 
 // ============================================
 // LVGL CONFIGURATION
@@ -71,6 +74,8 @@ std::unique_ptr<Arduino_IIC> FT3168(new Arduino_FT3x68(IIC_Bus, FT3168_DEVICE_AD
 // ============================================
 // NAVIGATION & STATE
 // ============================================
+#define NUM_MAIN_CARDS 24
+
 enum MainCard {
   CARD_CLOCK = 0,
   CARD_COMPASS,
@@ -95,8 +100,7 @@ enum MainCard {
   CARD_GALLERY,
   CARD_STOCKS,
   CARD_THEMES,
-  CARD_SYSTEM,
-  MAIN_CARD_COUNT
+  CARD_SYSTEM
 };
 
 int currentMainCard = CARD_CLOCK;
@@ -135,13 +139,13 @@ int movementData[24] = {0};
 int movementIndex = 0;
 unsigned long lastMovementSample = 0;
 
-// Stopwatch/Timer
+// Stopwatch/Timer (renamed to avoid conflict with ESP32 timerStart function)
 bool stopwatchRunning = false;
-unsigned long stopwatchStart = 0;
+unsigned long stopwatchStartMs = 0;
 unsigned long stopwatchElapsed = 0;
-bool timerRunning = false;
-unsigned long timerDuration = 300000;  // 5 minutes
-unsigned long timerStart = 0;
+bool countdownRunning = false;
+unsigned long countdownDuration = 300000;  // 5 minutes
+unsigned long countdownStartMs = 0;
 
 // Workout modes
 enum WorkoutMode { WORKOUT_NONE = 0, WORKOUT_BIKE, WORKOUT_RUN, WORKOUT_BASKETBALL };
@@ -154,7 +158,7 @@ int clickerScore = 0;
 int dinoScore = 0;
 bool dinoJumping = false;
 int dinoY = 0;
-int obstacleX = LCD_WIDTH;
+int obstacleX = 300;
 bool dinoGameOver = false;
 
 // Compass
@@ -346,11 +350,11 @@ void handleSwipe(int dx, int dy) {
   if (abs(dx) > abs(dy)) {
     if (dx > 50) {
       currentMainCard--;
-      if (currentMainCard < 0) currentMainCard = MAIN_CARD_COUNT - 1;
+      if (currentMainCard < 0) currentMainCard = NUM_MAIN_CARDS - 1;
       currentSubCard = 0;
     } else if (dx < -50) {
       currentMainCard++;
-      if (currentMainCard >= MAIN_CARD_COUNT) currentMainCard = 0;
+      if (currentMainCard >= NUM_MAIN_CARDS) currentMainCard = 0;
       currentSubCard = 0;
     }
   } else {
@@ -431,8 +435,13 @@ void createNavigationDots() {
   lv_obj_set_flex_flow(dotsContainer, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(dotsContainer, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   
-  int startCard = max(0, min(currentMainCard - 2, MAIN_CARD_COUNT - 5));
-  int endCard = min(MAIN_CARD_COUNT, startCard + 5);
+  int startCard = currentMainCard - 2;
+  if (startCard < 0) startCard = 0;
+  if (startCard > NUM_MAIN_CARDS - 5) startCard = NUM_MAIN_CARDS - 5;
+  if (startCard < 0) startCard = 0;
+  
+  int endCard = startCard + 5;
+  if (endCard > NUM_MAIN_CARDS) endCard = NUM_MAIN_CARDS;
   
   for (int i = startCard; i < endCard; i++) {
     lv_obj_t *dot = lv_obj_create(dotsContainer);
@@ -441,7 +450,9 @@ void createNavigationDots() {
     lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(dot, (i == currentMainCard) ? t.accent : t.secondary, 0);
     lv_obj_set_style_border_width(dot, 0, 0);
-    lv_obj_set_style_margin_all(dot, 3, 0);
+    lv_obj_set_style_pad_all(dot, 0, 0);
+    lv_obj_set_style_margin_left(dot, 3, 0);
+    lv_obj_set_style_margin_right(dot, 3, 0);
   }
   
   if (subCardCounts[currentMainCard] > 1) {
@@ -460,7 +471,8 @@ void createNavigationDots() {
       lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
       lv_obj_set_style_bg_color(dot, (i == currentSubCard) ? t.accent : t.secondary, 0);
       lv_obj_set_style_border_width(dot, 0, 0);
-      lv_obj_set_style_margin_all(dot, 4, 0);
+      lv_obj_set_style_margin_top(dot, 4, 0);
+      lv_obj_set_style_margin_bottom(dot, 4, 0);
     }
   }
 }
@@ -479,11 +491,13 @@ lv_obj_t* createCardContainer(const char* title) {
   lv_obj_set_style_border_width(card, 0, 0);
   lv_obj_set_style_pad_all(card, 15, 0);
   
-  lv_obj_t *titleLabel = lv_label_create(card);
-  lv_label_set_text(titleLabel, title);
-  lv_obj_set_style_text_color(titleLabel, t.text, 0);
-  lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_18, 0);
-  lv_obj_align(titleLabel, LV_ALIGN_TOP_MID, 0, 0);
+  if (strlen(title) > 0) {
+    lv_obj_t *titleLabel = lv_label_create(card);
+    lv_label_set_text(titleLabel, title);
+    lv_obj_set_style_text_color(titleLabel, t.text, 0);
+    lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_18, 0);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_MID, 0, 0);
+  }
   
   return card;
 }
@@ -536,8 +550,6 @@ void createAnalogClockCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("");
   
-  int cx = (LCD_WIDTH - 40) / 2;
-  int cy = (LCD_HEIGHT - 100) / 2;
   int radius = 120;
   
   // Clock face background
@@ -560,10 +572,10 @@ void createAnalogClockCard() {
     lv_obj_align(numLabel, LV_ALIGN_CENTER, positions[i][0], positions[i][1]);
   }
   
-  // Get current time for hands
+  // Get current time for hands using getter methods
   RTC_DateTime datetime = rtc.getDateTime();
-  float hourAngle = ((datetime.hour % 12) + datetime.minute / 60.0) * 30.0 - 90;
-  float minAngle = datetime.minute * 6.0 - 90;
+  int currentHour = datetime.getHour();
+  int currentMinute = datetime.getMinute();
   
   // Hour hand (red)
   lv_obj_t *hourHand = lv_obj_create(clockFace);
@@ -591,12 +603,11 @@ void createAnalogClockCard() {
 }
 
 // ============================================
-// COMPASS CARD (Based on reference image)
+// COMPASS CARD
 // ============================================
 void createCompassCard() {
   Theme &t = themes[currentTheme];
   
-  // Full screen black background for compass
   lv_obj_t *card = lv_obj_create(lv_scr_act());
   lv_obj_set_size(card, LCD_WIDTH - 20, LCD_HEIGHT - 60);
   lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 10);
@@ -629,7 +640,7 @@ void createCompassCard() {
   lv_obj_set_style_text_font(westLabel, &lv_font_montserrat_24, 0);
   lv_obj_align(westLabel, LV_ALIGN_LEFT_MID, 20, 0);
   
-  // Sunrise label and time
+  // Sunrise
   lv_obj_t *sunriseLabel = lv_label_create(card);
   lv_label_set_text(sunriseLabel, "SUNRISE");
   lv_obj_set_style_text_color(sunriseLabel, lv_color_hex(0x88CCFF), 0);
@@ -642,7 +653,7 @@ void createCompassCard() {
   lv_obj_set_style_text_font(sunriseTimeLabel, &lv_font_montserrat_36, 0);
   lv_obj_align(sunriseTimeLabel, LV_ALIGN_CENTER, 0, -50);
   
-  // Sunset label and time
+  // Sunset
   lv_obj_t *sunsetTimeLabel = lv_label_create(card);
   lv_label_set_text(sunsetTimeLabel, sunsetTime);
   lv_obj_set_style_text_color(sunsetTimeLabel, lv_color_hex(0xFF8844), 0);
@@ -655,7 +666,7 @@ void createCompassCard() {
   lv_obj_set_style_text_font(sunsetLabel, &lv_font_montserrat_12, 0);
   lv_obj_align(sunsetLabel, LV_ALIGN_CENTER, 0, 80);
   
-  // Compass needle - Red tip (N)
+  // Compass needle - Red tip
   lv_obj_t *needleRed = lv_obj_create(card);
   lv_obj_set_size(needleRed, 8, 80);
   lv_obj_align(needleRed, LV_ALIGN_CENTER, 40, -20);
@@ -663,7 +674,7 @@ void createCompassCard() {
   lv_obj_set_style_radius(needleRed, 4, 0);
   lv_obj_set_style_border_width(needleRed, 0, 0);
   
-  // Compass needle - Blue (S)
+  // Compass needle - Blue
   lv_obj_t *needleBlue = lv_obj_create(card);
   lv_obj_set_size(needleBlue, 8, 80);
   lv_obj_align(needleBlue, LV_ALIGN_CENTER, -40, 20);
@@ -687,7 +698,7 @@ void createActivityRingsCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("ACTIVITY");
   
-  // Move ring (Red/Pink)
+  // Move ring (Red)
   lv_obj_t *moveArc = lv_arc_create(card);
   lv_obj_set_size(moveArc, 200, 200);
   lv_obj_align(moveArc, LV_ALIGN_CENTER, 0, 0);
@@ -727,28 +738,24 @@ void createActivityRingsCard() {
   lv_obj_remove_style(standArc, NULL, LV_PART_KNOB);
   
   // Labels
-  lv_obj_t *moveLabel = lv_label_create(card);
-  char moveBuf[16];
+  char moveBuf[16], exBuf[16], stBuf[16];
   snprintf(moveBuf, sizeof(moveBuf), "%d%%", moveProgress);
+  snprintf(exBuf, sizeof(exBuf), "%d%%", exerciseProgress);
+  snprintf(stBuf, sizeof(stBuf), "%d%%", standProgress);
+  
+  lv_obj_t *moveLabel = lv_label_create(card);
   lv_label_set_text(moveLabel, moveBuf);
   lv_obj_set_style_text_color(moveLabel, lv_color_hex(0xFF2D55), 0);
-  lv_obj_set_style_text_font(moveLabel, &lv_font_montserrat_14, 0);
   lv_obj_align(moveLabel, LV_ALIGN_BOTTOM_LEFT, 20, -30);
   
   lv_obj_t *exerciseLabel = lv_label_create(card);
-  char exBuf[16];
-  snprintf(exBuf, sizeof(exBuf), "%d%%", exerciseProgress);
   lv_label_set_text(exerciseLabel, exBuf);
   lv_obj_set_style_text_color(exerciseLabel, lv_color_hex(0x30D158), 0);
-  lv_obj_set_style_text_font(exerciseLabel, &lv_font_montserrat_14, 0);
   lv_obj_align(exerciseLabel, LV_ALIGN_BOTTOM_MID, 0, -30);
   
   lv_obj_t *standLabel = lv_label_create(card);
-  char stBuf[16];
-  snprintf(stBuf, sizeof(stBuf), "%d%%", standProgress);
   lv_label_set_text(standLabel, stBuf);
   lv_obj_set_style_text_color(standLabel, lv_color_hex(0x5AC8FA), 0);
-  lv_obj_set_style_text_font(standLabel, &lv_font_montserrat_14, 0);
   lv_obj_align(standLabel, LV_ALIGN_BOTTOM_RIGHT, -20, -30);
 }
 
@@ -759,35 +766,32 @@ void createStepsCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("STEPS");
   
-  // Step count (large)
-  lv_obj_t *stepsLabel = lv_label_create(card);
   char stepsBuf[32];
-  snprintf(stepsBuf, sizeof(stepsBuf), "%lu", stepCount);
+  snprintf(stepsBuf, sizeof(stepsBuf), "%lu", (unsigned long)stepCount);
+  lv_obj_t *stepsLabel = lv_label_create(card);
   lv_label_set_text(stepsLabel, stepsBuf);
   lv_obj_set_style_text_color(stepsLabel, t.accent, 0);
   lv_obj_set_style_text_font(stepsLabel, &lv_font_montserrat_48, 0);
   lv_obj_align(stepsLabel, LV_ALIGN_CENTER, 0, -50);
   
-  // Goal progress bar
   lv_obj_t *progressBar = lv_bar_create(card);
   lv_obj_set_size(progressBar, LCD_WIDTH - 100, 20);
   lv_obj_align(progressBar, LV_ALIGN_CENTER, 0, 20);
-  int progress = min(100, (int)(stepCount * 100 / dailyGoal));
+  int progress = (stepCount * 100) / dailyGoal;
+  if (progress > 100) progress = 100;
   lv_bar_set_value(progressBar, progress, LV_ANIM_OFF);
   lv_obj_set_style_bg_color(progressBar, t.secondary, LV_PART_MAIN);
   lv_obj_set_style_bg_color(progressBar, t.accent, LV_PART_INDICATOR);
   lv_obj_set_style_radius(progressBar, 10, LV_PART_MAIN);
   lv_obj_set_style_radius(progressBar, 10, LV_PART_INDICATOR);
   
-  // Goal label
   char goalBuf[32];
-  snprintf(goalBuf, sizeof(goalBuf), "%lu / %d goal", stepCount, dailyGoal);
+  snprintf(goalBuf, sizeof(goalBuf), "%lu / %d goal", (unsigned long)stepCount, dailyGoal);
   lv_obj_t *goalLabel = lv_label_create(card);
   lv_label_set_text(goalLabel, goalBuf);
   lv_obj_set_style_text_color(goalLabel, t.secondary, 0);
   lv_obj_align(goalLabel, LV_ALIGN_CENTER, 0, 55);
   
-  // Distance & Calories
   lv_obj_t *statsRow = lv_obj_create(card);
   lv_obj_set_size(statsRow, LCD_WIDTH - 60, 60);
   lv_obj_align(statsRow, LV_ALIGN_BOTTOM_MID, 0, -30);
@@ -795,15 +799,15 @@ void createStepsCard() {
   lv_obj_set_style_radius(statsRow, 12, 0);
   lv_obj_set_style_border_width(statsRow, 0, 0);
   
-  char distBuf[16];
+  char distBuf[16], calBuf[16];
   snprintf(distBuf, sizeof(distBuf), "%.2f km", totalDistance);
+  snprintf(calBuf, sizeof(calBuf), "%.0f kcal", totalCalories);
+  
   lv_obj_t *distLabel = lv_label_create(statsRow);
   lv_label_set_text(distLabel, distBuf);
   lv_obj_set_style_text_color(distLabel, t.text, 0);
   lv_obj_align(distLabel, LV_ALIGN_LEFT_MID, 20, 0);
   
-  char calBuf[16];
-  snprintf(calBuf, sizeof(calBuf), "%.0f kcal", totalCalories);
   lv_obj_t *calLabel = lv_label_create(statsRow);
   lv_label_set_text(calLabel, calBuf);
   lv_obj_set_style_text_color(calLabel, t.text, 0);
@@ -960,7 +964,6 @@ void createStreakCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("STREAK");
   
-  // Large streak number
   char streakBuf[16];
   snprintf(streakBuf, sizeof(streakBuf), "%d", currentStreak);
   lv_obj_t *streakLabel = lv_label_create(card);
@@ -975,7 +978,6 @@ void createStreakCard() {
   lv_obj_set_style_text_font(daysLabel, &lv_font_montserrat_20, 0);
   lv_obj_align(daysLabel, LV_ALIGN_CENTER, 0, 20);
   
-  // Fire emoji placeholder
   lv_obj_t *fireLabel = lv_label_create(card);
   lv_label_set_text(fireLabel, LV_SYMBOL_CHARGE);
   lv_obj_set_style_text_color(fireLabel, lv_color_hex(0xFF9500), 0);
@@ -990,9 +992,9 @@ void createDailyGoalCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("DAILY GOAL");
   
-  int progress = min(100, (int)(stepCount * 100 / dailyGoal));
+  int progress = (stepCount * 100) / dailyGoal;
+  if (progress > 100) progress = 100;
   
-  // Circular progress
   lv_obj_t *arc = lv_arc_create(card);
   lv_obj_set_size(arc, 180, 180);
   lv_obj_align(arc, LV_ALIGN_CENTER, 0, -20);
@@ -1005,7 +1007,6 @@ void createDailyGoalCard() {
   lv_obj_set_style_arc_width(arc, 15, LV_PART_INDICATOR);
   lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
   
-  // Percentage
   char percBuf[16];
   snprintf(percBuf, sizeof(percBuf), "%d%%", progress);
   lv_obj_t *percLabel = lv_label_create(card);
@@ -1014,7 +1015,6 @@ void createDailyGoalCard() {
   lv_obj_set_style_text_font(percLabel, &lv_font_montserrat_36, 0);
   lv_obj_align(percLabel, LV_ALIGN_CENTER, 0, -20);
   
-  // Goal text
   char goalBuf[32];
   snprintf(goalBuf, sizeof(goalBuf), "%d steps goal", dailyGoal);
   lv_obj_t *goalLabel = lv_label_create(card);
@@ -1028,7 +1028,7 @@ void createDailyGoalCard() {
 // ============================================
 void musicBtnCallback(lv_event_t *e) {
   int action = (int)(intptr_t)lv_event_get_user_data(e);
-  if (action == 0) { currentTrack--; if (currentTrack < 0) currentTrack = max(0, musicFileCount - 1); }
+  if (action == 0) { currentTrack--; if (currentTrack < 0) currentTrack = musicFileCount > 0 ? musicFileCount - 1 : 0; }
   else if (action == 1) { musicPlaying = !musicPlaying; }
   else if (action == 2) { currentTrack++; if (currentTrack >= musicFileCount) currentTrack = 0; }
   navigateToCard(CARD_MUSIC, 0);
@@ -1047,7 +1047,6 @@ void createMusicCard() {
     return;
   }
   
-  // Album art placeholder
   lv_obj_t *albumArt = lv_obj_create(card);
   lv_obj_set_size(albumArt, 120, 120);
   lv_obj_align(albumArt, LV_ALIGN_CENTER, 0, -50);
@@ -1061,7 +1060,6 @@ void createMusicCard() {
   lv_obj_set_style_text_font(musicIcon, &lv_font_montserrat_48, 0);
   lv_obj_center(musicIcon);
   
-  // Controls
   lv_obj_t *controlsContainer = lv_obj_create(card);
   lv_obj_set_size(controlsContainer, 200, 60);
   lv_obj_align(controlsContainer, LV_ALIGN_BOTTOM_MID, 0, -30);
@@ -1111,6 +1109,11 @@ void createWeatherCard() {
 // ============================================
 // QUOTE CARD
 // ============================================
+void quoteClickCallback(lv_event_t *e) {
+  currentQuote = (currentQuote + 1) % 5;
+  navigateToCard(CARD_QUOTE, 0);
+}
+
 void createQuoteCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("MOTIVATION");
@@ -1129,10 +1132,7 @@ void createQuoteCard() {
   lv_obj_align(quoteLabel, LV_ALIGN_CENTER, 0, 20);
   
   lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(card, [](lv_event_t *e) {
-    currentQuote = (currentQuote + 1) % 5;
-    navigateToCard(CARD_QUOTE, 0);
-  }, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(card, quoteClickCallback, LV_EVENT_CLICKED, NULL);
 }
 
 // ============================================
@@ -1170,31 +1170,32 @@ void createYesNoCard() {
 // ============================================
 // TIMER CARD
 // ============================================
-static lv_obj_t *timerLabel = NULL;
+static lv_obj_t *timerDisplayLabel = NULL;
 
 void timerBtnCallback(lv_event_t *e) {
   lv_obj_t *btn = lv_event_get_target(e);
   const char *txt = lv_label_get_text(lv_obj_get_child(btn, 0));
   
   if (strcmp(txt, LV_SYMBOL_PLAY) == 0) {
-    timerRunning = true;
-    timerStart = millis();
+    countdownRunning = true;
+    countdownStartMs = millis();
   } else if (strcmp(txt, LV_SYMBOL_PAUSE) == 0) {
-    timerRunning = false;
+    countdownRunning = false;
   } else if (strcmp(txt, LV_SYMBOL_REFRESH) == 0) {
-    timerRunning = false;
-    timerDuration = 300000;
+    countdownRunning = false;
+    countdownDuration = 300000;
   }
+  navigateToCard(CARD_TIMER, 0);
 }
 
 void createTimerCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("TIMER");
   
-  unsigned long remaining = timerDuration;
-  if (timerRunning) {
-    unsigned long elapsed = millis() - timerStart;
-    remaining = timerDuration > elapsed ? timerDuration - elapsed : 0;
+  unsigned long remaining = countdownDuration;
+  if (countdownRunning) {
+    unsigned long elapsed = millis() - countdownStartMs;
+    remaining = countdownDuration > elapsed ? countdownDuration - elapsed : 0;
   }
   
   int mins = (remaining / 60000) % 60;
@@ -1202,13 +1203,12 @@ void createTimerCard() {
   char timeBuf[16];
   snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", mins, secs);
   
-  timerLabel = lv_label_create(card);
-  lv_label_set_text(timerLabel, timeBuf);
-  lv_obj_set_style_text_color(timerLabel, t.text, 0);
-  lv_obj_set_style_text_font(timerLabel, &lv_font_montserrat_48, 0);
-  lv_obj_align(timerLabel, LV_ALIGN_CENTER, 0, -30);
+  timerDisplayLabel = lv_label_create(card);
+  lv_label_set_text(timerDisplayLabel, timeBuf);
+  lv_obj_set_style_text_color(timerDisplayLabel, t.text, 0);
+  lv_obj_set_style_text_font(timerDisplayLabel, &lv_font_montserrat_48, 0);
+  lv_obj_align(timerDisplayLabel, LV_ALIGN_CENTER, 0, -30);
   
-  // Controls
   lv_obj_t *btnContainer = lv_obj_create(card);
   lv_obj_set_size(btnContainer, 200, 60);
   lv_obj_align(btnContainer, LV_ALIGN_CENTER, 0, 60);
@@ -1249,7 +1249,6 @@ void createDinoCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("DINO");
   
-  // Score
   char scoreBuf[16];
   snprintf(scoreBuf, sizeof(scoreBuf), "Score: %d", dinoScore);
   lv_obj_t *scoreLabel = lv_label_create(card);
@@ -1257,14 +1256,12 @@ void createDinoCard() {
   lv_obj_set_style_text_color(scoreLabel, t.text, 0);
   lv_obj_align(scoreLabel, LV_ALIGN_TOP_RIGHT, -10, 30);
   
-  // Ground line
   lv_obj_t *ground = lv_obj_create(card);
   lv_obj_set_size(ground, LCD_WIDTH - 60, 3);
   lv_obj_align(ground, LV_ALIGN_BOTTOM_MID, 0, -80);
   lv_obj_set_style_bg_color(ground, t.secondary, 0);
   lv_obj_set_style_border_width(ground, 0, 0);
   
-  // Dino (simple square)
   lv_obj_t *dino = lv_obj_create(card);
   lv_obj_set_size(dino, 30, 40);
   lv_obj_align(dino, LV_ALIGN_BOTTOM_LEFT, 40, -83 + dinoY);
@@ -1272,7 +1269,6 @@ void createDinoCard() {
   lv_obj_set_style_radius(dino, 5, 0);
   lv_obj_set_style_border_width(dino, 0, 0);
   
-  // Obstacle
   lv_obj_t *obstacle = lv_obj_create(card);
   lv_obj_set_size(obstacle, 20, 30);
   lv_obj_align(obstacle, LV_ALIGN_BOTTOM_LEFT, obstacleX, -83);
@@ -1280,7 +1276,6 @@ void createDinoCard() {
   lv_obj_set_style_radius(obstacle, 3, 0);
   lv_obj_set_style_border_width(obstacle, 0, 0);
   
-  // Tap to jump
   lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(card, dinoBtnCallback, LV_EVENT_CLICKED, NULL);
   
@@ -1337,6 +1332,8 @@ void createWorldClockCard() {
   lv_obj_t *card = createCardContainer("WORLD CLOCK");
   
   RTC_DateTime now = rtc.getDateTime();
+  int currentHour = now.getHour();
+  int currentMinute = now.getMinute();
   
   for (int i = 0; i < 4; i++) {
     lv_obj_t *row = lv_obj_create(card);
@@ -1351,9 +1348,9 @@ void createWorldClockCard() {
     lv_obj_set_style_text_color(cityLabel, t.text, 0);
     lv_obj_align(cityLabel, LV_ALIGN_LEFT_MID, 10, 0);
     
-    int cityHour = (now.hour + worldOffsets[i] + 24) % 24;
+    int cityHour = (currentHour + worldOffsets[i] + 24) % 24;
     char timeBuf[16];
-    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", cityHour, now.minute);
+    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", cityHour, currentMinute);
     lv_obj_t *timeLabel = lv_label_create(row);
     lv_label_set_text(timeLabel, timeBuf);
     lv_obj_set_style_text_color(timeLabel, t.accent, 0);
@@ -1369,7 +1366,6 @@ void createCalendarCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("CALENDAR");
   
-  // Month/Year header
   const char* months[] = {"January", "February", "March", "April", "May", "June",
                           "July", "August", "September", "October", "November", "December"};
   char headerBuf[32];
@@ -1379,7 +1375,6 @@ void createCalendarCard() {
   lv_obj_set_style_text_color(headerLabel, t.text, 0);
   lv_obj_align(headerLabel, LV_ALIGN_TOP_MID, 0, 30);
   
-  // Day grid (simplified - just numbers)
   lv_obj_t *grid = lv_obj_create(card);
   lv_obj_set_size(grid, LCD_WIDTH - 60, 220);
   lv_obj_align(grid, LV_ALIGN_CENTER, 0, 30);
@@ -1388,8 +1383,7 @@ void createCalendarCard() {
   lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
   lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
   
-  int daysInMonth = 31;
-  for (int d = 1; d <= daysInMonth; d++) {
+  for (int d = 1; d <= 31; d++) {
     lv_obj_t *dayObj = lv_obj_create(grid);
     lv_obj_set_size(dayObj, 38, 30);
     lv_obj_set_style_border_width(dayObj, 0, 0);
@@ -1413,6 +1407,11 @@ void createCalendarCard() {
 // ============================================
 // NOTES CARD
 // ============================================
+void notesClickCallback(lv_event_t *e) {
+  currentNote = (currentNote + 1) % 5;
+  navigateToCard(CARD_NOTES, 0);
+}
+
 void createNotesCard() {
   Theme &t = themes[currentTheme];
   lv_obj_t *card = createCardContainer("NOTES");
@@ -1431,10 +1430,7 @@ void createNotesCard() {
   lv_obj_align(noteLabel, LV_ALIGN_CENTER, 0, 0);
   
   lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(card, [](lv_event_t *e) {
-    currentNote = (currentNote + 1) % 5;
-    navigateToCard(CARD_NOTES, 0);
-  }, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(card, notesClickCallback, LV_EVENT_CLICKED, NULL);
 }
 
 // ============================================
@@ -1496,7 +1492,6 @@ void createBatteryCard() {
   int battPercent = power.getBatteryPercent();
   bool isCharging = power.isCharging();
   
-  // Arc
   lv_obj_t *arc = lv_arc_create(card);
   lv_obj_set_size(arc, 160, 160);
   lv_obj_align(arc, LV_ALIGN_CENTER, 0, -20);
@@ -1533,7 +1528,7 @@ void createBatteryCard() {
 // ============================================
 void galleryBtnCallback(lv_event_t *e) {
   int action = (int)(intptr_t)lv_event_get_user_data(e);
-  if (action == 0) { currentPhoto--; if (currentPhoto < 0) currentPhoto = max(0, photoFileCount - 1); }
+  if (action == 0) { currentPhoto--; if (currentPhoto < 0) currentPhoto = photoFileCount > 0 ? photoFileCount - 1 : 0; }
   else { currentPhoto++; if (currentPhoto >= photoFileCount) currentPhoto = 0; }
   navigateToCard(CARD_GALLERY, 0);
 }
@@ -1731,7 +1726,7 @@ void createSystemCard() {
   lv_obj_set_style_bg_color(ramBar, t.secondary, LV_PART_MAIN);
   lv_obj_set_style_bg_color(ramBar, lv_color_hex(0x4CAF50), LV_PART_INDICATOR);
   
-  // Temperature
+  // Temp
   lv_obj_t *tempRow = lv_obj_create(card);
   lv_obj_set_size(tempRow, LCD_WIDTH - 60, 45);
   lv_obj_align(tempRow, LV_ALIGN_TOP_MID, 0, 150);
@@ -1746,13 +1741,13 @@ void createSystemCard() {
   
   float temp = temperatureRead();
   char tempBuf[16];
-  snprintf(tempBuf, sizeof(tempBuf), "%.1f°C", temp);
+  snprintf(tempBuf, sizeof(tempBuf), "%.1f C", temp);
   lv_obj_t *tempVal = lv_label_create(tempRow);
   lv_label_set_text(tempVal, tempBuf);
   lv_obj_set_style_text_color(tempVal, t.accent, 0);
   lv_obj_align(tempVal, LV_ALIGN_RIGHT_MID, -10, 0);
   
-  // WiFi status
+  // WiFi
   lv_obj_t *wifiRow = lv_obj_create(card);
   lv_obj_set_size(wifiRow, LCD_WIDTH - 60, 45);
   lv_obj_align(wifiRow, LV_ALIGN_TOP_MID, 0, 205);
@@ -1911,18 +1906,18 @@ void loop() {
     if (currentMainCard == CARD_CLOCK && currentSubCard == 0 && clockTimeLabel) {
       RTC_DateTime datetime = rtc.getDateTime();
       char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", datetime.hour, datetime.minute);
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", datetime.getHour(), datetime.getMinute());
       lv_label_set_text(clockTimeLabel, timeBuf);
     }
     
-    if (timerRunning && timerLabel) {
-      unsigned long elapsed = millis() - timerStart;
-      unsigned long remaining = timerDuration > elapsed ? timerDuration - elapsed : 0;
+    if (countdownRunning && timerDisplayLabel) {
+      unsigned long elapsed = millis() - countdownStartMs;
+      unsigned long remaining = countdownDuration > elapsed ? countdownDuration - elapsed : 0;
       int mins = (remaining / 60000) % 60;
       int secs = (remaining / 1000) % 60;
       char buf[16];
       snprintf(buf, sizeof(buf), "%02d:%02d", mins, secs);
-      lv_label_set_text(timerLabel, buf);
+      lv_label_set_text(timerDisplayLabel, buf);
     }
   }
   
@@ -1944,7 +1939,7 @@ void loop() {
       
       lastAccMagnitude = magnitude;
       
-      // Update compass heading from magnetometer (simplified)
+      // Compass update
       compassHeading = fmod(compassHeading + 0.5, 360.0);
       
       // Sleep movement tracking
