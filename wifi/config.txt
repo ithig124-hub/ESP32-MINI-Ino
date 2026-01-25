@@ -19,6 +19,15 @@ SSID=YourWiFiNetworkName
 # Your WiFi password
 PASSWORD=YourWiFiPassword
 
+WIFI1_SSID=HomeNetwork
+WIFI1_PASS=HomePassword
+
+WIFI2_SSID=WorkNetwork
+WIFI2_PASS=WorkPassword
+
+WIFI3_SSID=PhoneHotspot
+WIFI3_PASS=HotspotPass
+
 # ═══════════════════════════════════════════════════════════════════
 #  OPTIONAL: Weather Location Override
 #  Leave blank or delete to auto-detect from your IP address

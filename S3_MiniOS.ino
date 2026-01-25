@@ -88,11 +88,21 @@
 #define CARD_USAGE_SLOTS 6     // Number of main cards
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  WIFI CONFIGURATION
+//  MULTI-WIFI CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-char wifiSSID[64] = "";
-char wifiPassword[64] = "";
+#define MAX_WIFI_NETWORKS 5
+
+struct WiFiNetwork {
+    char ssid[64];
+    char password[64];
+    bool valid;
+};
+
+WiFiNetwork wifiNetworks[MAX_WIFI_NETWORKS];
+int numWifiNetworks = 0;
+int connectedNetworkIndex = -1;
+
 char weatherCity[64] = "Perth";
 char weatherCountry[8] = "AU";
 long gmtOffsetSec = 8 * 3600;
@@ -417,13 +427,44 @@ void createWiFiTemplate() {
     if (!SD_MMC.exists("/wifi")) SD_MMC.mkdir("/wifi");
     File file = SD_MMC.open(WIFI_CONFIG_PATH, "w");
     if (file) {
-        file.println("# WiFi Config for S3 MiniOS");
-        file.println("SSID=YourWiFiName");
-        file.println("PASSWORD=YourPassword");
+        file.println("# ═══════════════════════════════════════════════════════");
+        file.println("# S3 MiniOS WiFi Configuration - MULTI-NETWORK SUPPORT");
+        file.println("# ═══════════════════════════════════════════════════════");
+        file.println("#");
+        file.println("# Add up to 5 WiFi networks. Watch will try each in order");
+        file.println("# until one connects successfully.");
+        file.println("#");
+        file.println("# FORMAT: Use WIFI1, WIFI2, WIFI3, etc. for multiple networks");
+        file.println("#");
+        file.println("# ─────────────────────────────────────────────────────────");
+        file.println("# NETWORK 1 (Primary - Home)");
+        file.println("# ─────────────────────────────────────────────────────────");
+        file.println("WIFI1_SSID=YourHomeNetwork");
+        file.println("WIFI1_PASS=YourHomePassword");
+        file.println("#");
+        file.println("# ─────────────────────────────────────────────────────────");
+        file.println("# NETWORK 2 (Secondary - Work)");
+        file.println("# ─────────────────────────────────────────────────────────");
+        file.println("WIFI2_SSID=YourWorkNetwork");
+        file.println("WIFI2_PASS=YourWorkPassword");
+        file.println("#");
+        file.println("# ─────────────────────────────────────────────────────────");
+        file.println("# NETWORK 3 (Optional - Mobile Hotspot)");
+        file.println("# ─────────────────────────────────────────────────────────");
+        file.println("#WIFI3_SSID=MyPhoneHotspot");
+        file.println("#WIFI3_PASS=HotspotPassword");
+        file.println("#");
+        file.println("# ─────────────────────────────────────────────────────────");
+        file.println("# GLOBAL SETTINGS");
+        file.println("# ─────────────────────────────────────────────────────────");
+        file.println("# Weather location (leave blank to auto-detect from IP)");
         file.println("CITY=Perth");
         file.println("COUNTRY=AU");
+        file.println("#");
+        file.println("# Timezone offset from GMT in hours");
         file.println("GMT_OFFSET=8");
         file.close();
+        Serial.println("[OK] Created multi-WiFi template");
     }
 }
 
@@ -431,6 +472,20 @@ bool loadWiFiFromSD() {
     if (!hasSD) return false;
     File file = SD_MMC.open(WIFI_CONFIG_PATH, "r");
     if (!file) { createWiFiTemplate(); return false; }
+    
+    Serial.println("[INFO] Loading WiFi networks from SD...");
+    
+    // Reset network list
+    numWifiNetworks = 0;
+    for (int i = 0; i < MAX_WIFI_NETWORKS; i++) {
+        wifiNetworks[i].ssid[0] = '\0';
+        wifiNetworks[i].password[0] = '\0';
+        wifiNetworks[i].valid = false;
+    }
+    
+    // Temporary storage for parsing
+    char tempSSID[5][64] = {""};
+    char tempPass[5][64] = {""};
     
     while (file.available()) {
         String line = file.readStringUntil('\n');
@@ -442,25 +497,103 @@ bool loadWiFiFromSD() {
         String value = line.substring(eqPos + 1);
         key.trim(); value.trim();
         
-        if (key == "SSID") strncpy(wifiSSID, value.c_str(), 63);
-        else if (key == "PASSWORD") strncpy(wifiPassword, value.c_str(), 63);
+        // Parse WIFI1_SSID through WIFI5_SSID
+        for (int i = 1; i <= MAX_WIFI_NETWORKS; i++) {
+            char ssidKey[16], passKey[16];
+            snprintf(ssidKey, sizeof(ssidKey), "WIFI%d_SSID", i);
+            snprintf(passKey, sizeof(passKey), "WIFI%d_PASS", i);
+            
+            if (key == ssidKey) {
+                strncpy(tempSSID[i-1], value.c_str(), 63);
+                tempSSID[i-1][63] = '\0';
+            }
+            else if (key == passKey) {
+                strncpy(tempPass[i-1], value.c_str(), 63);
+                tempPass[i-1][63] = '\0';
+            }
+        }
+        
+        // Legacy single-network support (SSID= and PASSWORD=)
+        if (key == "SSID" && strlen(tempSSID[0]) == 0) {
+            strncpy(tempSSID[0], value.c_str(), 63);
+        }
+        else if (key == "PASSWORD" && strlen(tempPass[0]) == 0) {
+            strncpy(tempPass[0], value.c_str(), 63);
+        }
+        
+        // Global settings
         else if (key == "CITY") strncpy(weatherCity, value.c_str(), 63);
         else if (key == "COUNTRY") strncpy(weatherCountry, value.c_str(), 7);
         else if (key == "GMT_OFFSET") gmtOffsetSec = value.toInt() * 3600;
     }
     file.close();
-    wifiConfigFromSD = (strlen(wifiSSID) > 0);
+    
+    // Build valid network list
+    for (int i = 0; i < MAX_WIFI_NETWORKS; i++) {
+        if (strlen(tempSSID[i]) > 0) {
+            strncpy(wifiNetworks[numWifiNetworks].ssid, tempSSID[i], 63);
+            strncpy(wifiNetworks[numWifiNetworks].password, tempPass[i], 63);
+            wifiNetworks[numWifiNetworks].valid = true;
+            Serial.printf("  Network %d: %s\n", numWifiNetworks + 1, tempSSID[i]);
+            numWifiNetworks++;
+        }
+    }
+    
+    wifiConfigFromSD = (numWifiNetworks > 0);
+    Serial.printf("[INFO] Loaded %d WiFi networks\n", numWifiNetworks);
     return wifiConfigFromSD;
 }
 
 void connectWiFi() {
-    if (strlen(wifiSSID) == 0) return;
+    if (numWifiNetworks == 0) {
+        Serial.println("[WARN] No WiFi networks configured");
+        return;
+    }
+    
     WiFi.mode(WIFI_STA);
-    WiFi.begin(wifiSSID, wifiPassword);
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) { delay(500); attempts++; }
-    wifiConnected = (WiFi.status() == WL_CONNECTED);
-    if (wifiConnected) Serial.printf("[OK] WiFi: %s\n", WiFi.localIP().toString().c_str());
+    
+    // Try each network in order
+    for (int i = 0; i < numWifiNetworks; i++) {
+        if (!wifiNetworks[i].valid) continue;
+        
+        Serial.printf("[INFO] Trying WiFi %d/%d: %s\n", i + 1, numWifiNetworks, wifiNetworks[i].ssid);
+        
+        WiFi.begin(wifiNetworks[i].ssid, wifiNetworks[i].password);
+        
+        int attempts = 0;
+        while (WiFi.status() != WL_CONNECTED && attempts < 15) {
+            delay(500);
+            Serial.print(".");
+            attempts++;
+        }
+        Serial.println();
+        
+        if (WiFi.status() == WL_CONNECTED) {
+            wifiConnected = true;
+            connectedNetworkIndex = i;
+            Serial.printf("[OK] Connected to: %s\n", wifiNetworks[i].ssid);
+            Serial.printf("[OK] IP: %s\n", WiFi.localIP().toString().c_str());
+            return;
+        } else {
+            Serial.printf("[WARN] Failed to connect to: %s\n", wifiNetworks[i].ssid);
+            WiFi.disconnect();
+            delay(100);
+        }
+    }
+    
+    Serial.println("[WARN] Could not connect to any WiFi network");
+    wifiConnected = false;
+    connectedNetworkIndex = -1;
+}
+
+// Auto-reconnect to next available network if disconnected
+void checkWiFiReconnect() {
+    if (wifiConnected && WiFi.status() != WL_CONNECTED) {
+        Serial.println("[WARN] WiFi disconnected, attempting reconnect...");
+        wifiConnected = false;
+        connectedNetworkIndex = -1;
+        connectWiFi();
+    }
 }
 
 void getLocationFromIP() {
@@ -1115,10 +1248,15 @@ void drawMainWeather() {
     gfx->setCursor(MARGIN + 20, 250);
     gfx->printf("Humidity: %d%%  Wind: %d km/h", weatherHumidity, weatherWind);
     
-    if (wifiConfigFromSD) {
+    // Show connected network
+    if (wifiConnected && connectedNetworkIndex >= 0) {
         gfx->setTextColor(COL_SUCCESS);
         gfx->setCursor(MARGIN + 20, 270);
-        gfx->print("WiFi from SD");
+        gfx->printf("WiFi: %s", wifiNetworks[connectedNetworkIndex].ssid);
+    } else if (wifiConfigFromSD) {
+        gfx->setTextColor(COL_WARNING);
+        gfx->setCursor(MARGIN + 20, 270);
+        gfx->printf("WiFi: Disconnected (%d networks)", numWifiNetworks);
     }
     
     gfx->setTextColor(COL_TEXT_DIMMER);
@@ -1182,9 +1320,20 @@ void drawMainSystem() {
     gfx->setCursor(MARGIN + 20, 270);
     gfx->printf("Free RAM: %lu KB", freeRAM / 1024);
     
+    // WiFi status with network name
     gfx->setCursor(MARGIN + 20, 290);
-    gfx->printf("WiFi: %s%s", wifiConnected ? "Connected" : "Off", wifiConfigFromSD ? " (SD)" : "");
+    if (wifiConnected && connectedNetworkIndex >= 0) {
+        gfx->setTextColor(COL_SUCCESS);
+        gfx->printf("WiFi: %s", wifiNetworks[connectedNetworkIndex].ssid);
+    } else if (numWifiNetworks > 0) {
+        gfx->setTextColor(COL_WARNING);
+        gfx->printf("WiFi: Disconnected (%d saved)", numWifiNetworks);
+    } else {
+        gfx->setTextColor(COL_TEXT_DIM);
+        gfx->print("WiFi: Not configured");
+    }
     
+    gfx->setTextColor(COL_TEXT_DIM);
     gfx->setCursor(MARGIN + 20, 310);
     gfx->printf("SD Card: %s", hasSD ? "OK" : "None");
     
@@ -1763,6 +1912,15 @@ void serviceWeather() {
     if (wifiConnected && millis() - lastWeatherUpdate >= 1800000) fetchWeather();
 }
 
+void serviceWiFi() {
+    // Check WiFi connection every 30 seconds and reconnect if needed
+    static unsigned long lastWiFiCheck = 0;
+    if (millis() - lastWiFiCheck >= 30000) {
+        lastWiFiCheck = millis();
+        checkWiFiReconnect();
+    }
+}
+
 void serviceSave() {
     if (millis() - lastSaveTime >= SAVE_INTERVAL_MS) saveUserData();
 }
@@ -1869,9 +2027,9 @@ void setup() {
     
     loadUserData();
     
-    if (strlen(wifiSSID) > 0) {
-        gfx->setCursor(100, 280);
-        gfx->print("Connecting WiFi...");
+    if (numWifiNetworks > 0) {
+        gfx->setCursor(80, 280);
+        gfx->printf("Trying %d WiFi networks...", numWifiNetworks);
         connectWiFi();
         if (wifiConnected) {
             getLocationFromIP();
@@ -1890,6 +2048,8 @@ void setup() {
     
     Serial.println("\n═══════════════════════════════════════════");
     Serial.println("  NEW FEATURES:");
+    Serial.println("  - Multi-WiFi support (up to 5 networks)");
+    Serial.println("  - Auto-reconnect on disconnect");
     Serial.println("  - Usage tracking (24h screen time)");
     Serial.println("  - ML-style battery estimation");
     Serial.println("  - Battery Stats graph card");
@@ -1916,6 +2076,7 @@ void loop() {
     serviceMusic();
     serviceGames();
     serviceWeather();
+    serviceWiFi();
     serviceSave();
     serviceScreenTimeout();
     serviceUsageTracking();
