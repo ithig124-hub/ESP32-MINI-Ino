@@ -1,0 +1,39 @@
+# ═══════════════════════════════════════════════════════════════════
+#  S3 MiniOS v3.0 - WiFi Configuration Template
+# ═══════════════════════════════════════════════════════════════════
+#
+#  INSTRUCTIONS:
+#  1. Copy this file to your SD card: /wifi/config.txt
+#  2. Edit the values below with your WiFi credentials
+#  3. Insert SD card and reboot the watch
+#  4. Watch will auto-connect to WiFi on boot!
+#
+#  FORMAT: KEY=VALUE (no spaces around equals sign)
+#  Lines starting with # are comments (ignored)
+#
+# ═══════════════════════════════════════════════════════════════════
+
+# Your WiFi network name (SSID)
+SSID=YourWiFiNetworkName
+
+# Your WiFi password
+PASSWORD=YourWiFiPassword
+
+# ═══════════════════════════════════════════════════════════════════
+#  OPTIONAL: Weather Location Override
+#  Leave blank or delete to auto-detect from your IP address
+# ═══════════════════════════════════════════════════════════════════
+
+# City name for weather (default: auto-detect from IP)
+CITY=Perth
+
+# Country code (2 letters, e.g., AU, US, UK, etc.)
+COUNTRY=AU
+
+# ═══════════════════════════════════════════════════════════════════
+#  OPTIONAL: Timezone Setting
+# ═══════════════════════════════════════════════════════════════════
+
+# Timezone offset from GMT in hours
+# Examples: Perth=8, Sydney=10, London=0, New York=-5
+GMT_OFFSET=8

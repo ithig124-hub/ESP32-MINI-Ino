@@ -1,269 +1,186 @@
-# Widget OS v2.0 - Premium Edition
+# S3 MiniOS v3.0 - Enhanced Edition
 
-**ESP32-S3 Touch AMOLED 1.8" Smartwatch Firmware**
+**ESP32-S3-Touch-AMOLED-1.8 Smartwatch Firmware**
 
-A professional smartwatch OS with 26+ premium cards, smooth navigation, full sensor fusion compass, and Apple Watch-inspired design.
+## ✨ New Features in v3.0
+
+### 📶 WiFi Auto-Connect from SD Card
+- Create `/wifi/config.txt` on your SD card with WiFi credentials
+- Watch automatically connects on boot
+- Template file provided in `sd_card_template/wifi/config.txt`
+
+```
+# Example /wifi/config.txt
+SSID=YourWiFiName
+PASSWORD=YourPassword
+CITY=Perth
+COUNTRY=AU
+GMT_OFFSET=8
+```
+
+### 🔋 Battery Time Estimation
+- Shows estimated remaining battery time on System card
+- Accounts for screen-on vs screen-off power consumption
+- Based on 500mAh battery capacity
+
+### ⚡ Reduced Lag - 2 Hour Save Interval
+- Stats now save every **2 hours** instead of 30 seconds
+- Dramatically reduces lag and write operations
+- Data still safe - saved on shutdown
+
+### 🔄 Factory Reset Button
+- Found in System menu (swipe down from System card)
+- Resets ALL data (steps, scores, settings)
+- **Preserves:** SD card data, firmware/sketch
+- Device restarts after reset
+
+### 🌍 Weather by WiFi Location
+- Auto-detects your city from IP address
+- Or manually set city in SD card config
+- Default: Perth, AU
+
+### 🔘 Power Button Controls
+- **Tap top-right corner**: Toggle screen ON/OFF
+- **Long press (3 sec)**: Shutdown device
+- Visual progress bar during long press
 
 ---
 
-## ✨ Major Improvements in v2.0
+## 📱 Card Layout
 
-### 🧭 Full Sensor Fusion Compass
-- **Complementary Filter** - Fuses gyroscope + accelerometer for accurate orientation
-- **Relative Orientation Tracking** - Tracks rotation from initial position
-- **Tilt-Based Level Display** - Bubble level like a carpenter's tool
-- **Gyroscope Rotation Visualization** - Shows roll, pitch, yaw in real-time
-- **Smooth Needle Animation** - No more jerky 2-line display!
-
-### 🎨 Premium Apple Watch-Inspired Design
-- **8 New Gradient Themes** - Midnight, Ocean, Sunset, Aurora, Forest, Ruby, Graphite, Mint
-- **Glassmorphism Cards** - Frosted glass effect with shadows
-- **Pill-Shaped Navigation Dots** - Active indicator stretches like Apple Watch
-- **Color-Coded UI Elements** - Semantic colors for status (green=good, red=warning)
-
-### 🎮 Enhanced Games
-- **Blackjack** - Visual playing cards with suits and ranks
-- **Dino Run** - Pixel-style dinosaur with particle ground effects
-- **Yes/No Spinner** - Glowing result ring with color feedback
-
-### 🔄 Smooth Navigation
-- **Gesture Velocity Detection** - Faster swipes = quicker transitions
-- **Infinite Horizontal Loop** - Seamless category cycling
-- **Visual Transition States** - Direction indicators during swipes
+| Card | Description |
+|------|-------------|
+| **Clock** | Time, date, location, WiFi status |
+| **Steps** | Daily steps with progress bar |
+| **Music** | Media controls (mock) |
+| **Games** | Clicker game, more coming |
+| **Weather** | Temperature from API + location |
+| **System** | Battery %, estimate, reset option |
 
 ---
 
-## 🧭 Navigation System
+## 🎮 Navigation
 
-### Core Structure
-The UI is built from **main cards (categories)** arranged in a horizontal, infinite loop.
-
-```
-Clock → Compass → Activity → Games → Weather → Stocks → Media → Timer → Streak → Calendar → Settings → System → Clock → ...
-```
-
-### Gesture Controls
 | Gesture | Action |
 |---------|--------|
-| **Swipe Left/Right** | Change category (infinite loop) |
-| **Swipe Down** | Enter sub-cards within category |
-| **Swipe Up** | Return to main card of category |
-
-### Navigation Rules
-- Horizontal swipes ALWAYS move between main cards
-- Entering a category always shows its main card first
-- Leaving a category resets to main card
-- Sub-cards are only accessible via vertical swipes
+| Swipe Left/Right | Change main card |
+| Swipe Down | Enter sub-cards |
+| Swipe Up | Return to main card |
+| Tap | Interact with buttons |
 
 ---
 
-## 📱 All Cards (26+)
+## 📁 SD Card Structure
 
-| Category | Cards |
-|----------|-------|
-| **Clock** | Digital Clock (with status bar), Analog Clock |
-| **Compass** | Sensor Fusion Compass, Bubble Level, Gyro Rotation |
-| **Activity** | Steps (gradient), Activity Rings, Workouts, Distance |
-| **Games** | Blackjack (visual cards), Dino Runner, Yes/No Spinner |
-| **Weather** | Current Weather, 3-Day Forecast |
-| **Stocks** | Stock Prices, Cryptocurrency |
-| **Media** | Music Player, Gallery |
-| **Timer** | Sand Timer (5min), Stopwatch, Countdown |
-| **Streak** | Step Streak (fire), Game Streak, Achievements |
-| **Calendar** | Monthly Calendar (Jan 2026) |
-| **Settings** | Brightness, Theme, Timeout, Compass Calibration |
-| **System** | Battery, System Info |
-
----
-
-## 🧭 Compass Modes
-
-### 1. Sensor Fusion Compass (Main)
-- **Algorithm**: Complementary filter (98% gyro, 2% accel)
-- **Features**:
-  - Rotating compass rose with cardinal directions
-  - Red/Blue needle (N/S)
-  - Degree heading display (0-360°)
-  - Direction label (N, NE, E, SE, S, SW, W, NW)
-  - Auto-calibration when device is level
-
-### 2. Bubble Level / Tilt Display
-- **Purpose**: Shows if device is level
-- **Features**:
-  - Circular bubble that moves with tilt
-  - Crosshairs for reference
-  - Green = Level, Red = Tilted
-  - X/Y tilt values in degrees
-
-### 3. Gyroscope Rotation Tracking
-- **Purpose**: Shows 3D orientation changes
-- **Features**:
-  - Three concentric arcs (Roll, Pitch, Yaw)
-  - Color-coded: Red=Pitch, Green=Roll, Blue=Yaw
-  - Real-time degree values
-
----
-
-## 🎨 Gradient Themes (8 Options)
-
-| Theme | Colors |
-|-------|--------|
-| **Midnight** | Dark grays with blue accents |
-| **Ocean** | Deep blues and teals |
-| **Sunset** | Orange to gold gradient |
-| **Aurora** | Purple to pink |
-| **Forest** | Deep greens |
-| **Ruby** | Red tones |
-| **Graphite** | Neutral grays |
-| **Mint** | Fresh green and white |
-
----
-
-## 🎮 Games
-
-### Blackjack
-- **Visual Cards**: Shows rank (A, 2-10, J, Q, K) and suit color
-- **Animations**: Card shadows, golden buttons
-- **Features**: Hit/Stand buttons, win streak tracking
-- **Casino Feel**: Green felt background, gold accents
-
-### Dino Runner
-- **Character**: Pixel-style green dinosaur with eye
-- **Environment**: Particle ground texture, red obstacles
-- **Controls**: Large "JUMP!" button with glow
-- **Game Over**: Overlay with final score
-
-### Yes/No Spinner
-- **Display**: Large result in center circle
-- **Feedback**: Glowing ring (green=positive, red=negative)
-- **Answers**: Yes, No, Maybe, Ask Again, Definitely, Never
-
----
-
-## ⚙️ Sensor Fusion Details
-
-### Complementary Filter Algorithm
-```cpp
-// Fuse accelerometer (long-term accuracy) with gyroscope (short-term accuracy)
-roll = 0.98 * (roll + gyro_roll * dt) + 0.02 * accel_roll;
-pitch = 0.98 * (pitch + gyro_pitch * dt) + 0.02 * accel_pitch;
-yaw += gyro_yaw * dt;  // Integrated with drift compensation
+```
+SD_CARD/
+└── wifi/
+    └── config.txt    ← WiFi credentials here
 ```
 
-### Calibration
-- **Auto-Calibrate**: When device is held level for 1+ second
-- **Manual Calibrate**: Via Settings → Calibrate Compass
-- **Reference Point**: Initial orientation becomes "North"
+### Config File Format
 
-### Why No True North?
-The QMI8658 IMU has accelerometer and gyroscope, but **no magnetometer**. True north requires a magnetometer to sense Earth's magnetic field. Our pseudo-compass shows **relative orientation** from where you started.
-
----
-
-## 🔌 API Integration
-
-| Service | Usage |
-|---------|-------|
-| **OpenWeather** | Temperature, conditions for Sydney |
-| **CoinAPI** | BTC, ETH prices |
-| **Alpha Vantage** | Stock prices |
-| **NTP** | Time sync (GMT+8) |
+```
+# Comment lines start with #
+SSID=MyWiFiNetwork
+PASSWORD=MySecretPassword
+CITY=Perth           # Optional: weather location
+COUNTRY=AU           # Optional: 2-letter country code
+GMT_OFFSET=8         # Optional: timezone offset
+```
 
 ---
 
-## 💾 Data Persistence
+## 🔋 Battery Information
 
-All user data saved to SPIFFS every 30 seconds:
-- Steps count & streaks
-- Game statistics
-- Settings (theme, brightness, timeout)
-- Compass calibration state
+- **Battery Type**: 3.7V LiPo (MX1.25 connector)
+- **Capacity**: ~500mAh (typical)
+- **Screen On**: ~80mA draw → ~6 hours runtime
+- **Screen Off**: ~15mA draw → ~33 hours standby
 
 ---
 
-## 🔧 Hardware
+## ⚡ Power Controls
+
+### Screen Toggle (Quick Tap)
+- Tap the top-right corner to turn screen ON/OFF
+- Saves battery when not in use
+
+### Shutdown (Long Press)
+- Hold top-right corner for 3 seconds
+- Progress bar appears during hold
+- Saves data before shutdown
+- Uses AXP2101 power-off feature
+
+---
+
+## 🔧 Hardware Compatibility
 
 | Component | Model |
 |-----------|-------|
-| MCU | ESP32-S3 |
-| Display | 1.8" AMOLED (368×448) |
-| Touch | FT3168 |
-| IMU | QMI8658 (Accel + Gyro) |
+| Board | Waveshare ESP32-S3-Touch-AMOLED-1.8 |
+| Display | SH8601 QSPI AMOLED 368×448 |
+| Touch | FT3168 Capacitive |
+| IMU | QMI8658 (Accelerometer/Gyro) |
 | RTC | PCF85063 |
 | PMU | AXP2101 |
+| Battery | 3.7V LiPo via MX1.25 header |
 
 ---
 
-## 📁 Files
+## 📂 Files
 
 ```
-/app/esp32_project/
-├── S3_MiniOS.ino    # Main firmware (~3400 lines)
-├── pin_config.h     # Hardware pin definitions
-└── README.md        # This documentation
+/app/esp32-project/
+├── S3_MiniOS/
+│   └── S3_MiniOS.ino     # Main firmware (v3.0)
+├── sd_card_template/
+│   └── wifi/
+│       └── config.txt     # WiFi template - copy to SD card
+├── pin_config.h           # Hardware pin definitions
+└── README.md              # This file
 ```
 
 ---
 
 ## 🚀 Installation
 
-1. Open `S3_MiniOS.ino` in Arduino IDE
+1. Open `S3_MiniOS/S3_MiniOS.ino` in Arduino IDE
 2. Install required libraries:
-   - LVGL
    - Arduino_GFX_Library
-   - Arduino_DriveBus_Library
    - ArduinoJson
-   - XPowersLib
-   - SensorLib
-3. Select board: **ESP32S3 Dev Module**
-4. Flash size: 16MB
-5. PSRAM: OPI PSRAM
-6. Upload!
+   - Preferences (built-in)
+3. Board: **ESP32S3 Dev Module**
+4. Flash: 16MB, PSRAM: OPI
+5. Upload!
+
+### Setting up WiFi
+
+1. Copy `sd_card_template/wifi/config.txt` to SD card
+2. Edit with your WiFi credentials
+3. Insert SD card into watch
+4. Reboot - WiFi connects automatically!
 
 ---
 
-## 📱 Navigation Guide
+## 📋 Changelog
 
-```
-┌────────────────────────────────────────┐
-│     ← SWIPE LEFT/RIGHT →               │
-│     (Change Category - Infinite Loop)  │
-│                                        │
-│           ↓ SWIPE DOWN                 │
-│           (Enter Sub-cards)            │
-│                                        │
-│           ↑ SWIPE UP                   │
-│           (Return to Main)             │
-│                                        │
-│  [━━][●][●][●][●] ← Category dots      │
-│                            ●           │
-│                            ●  Sub-card │
-│                            ●  dots     │
-└────────────────────────────────────────┘
-```
+### v3.0 (Current)
+- WiFi auto-connect from SD card `/wifi/config.txt`
+- Save interval changed to 2 hours (reduced lag)
+- Factory reset button in System menu
+- Weather location from IP geolocation
+- Battery time estimation display
+- Quick tap ON/OFF, long press shutdown
+- Power button visual feedback
+
+### v2.x
+- Premium UI design
+- Activity tracking
+- Games hub
+- Weather API integration
 
 ---
 
-**Widget OS v2.0** - Premium Edition
+**S3 MiniOS v3.0** - Enhanced Edition  
 Built for ESP32-S3 Touch AMOLED 1.8"
-
----
-
-## v2.1 Updates
-
-### Bug Fixes
-- **Dino Jump Fixed**: Proper physics-based jumping with gravity and velocity
-- **Theme Switching**: Instant theme changes (removed save delay)
-- **Reduced Lag**: Compass/sensor updates optimized to 150ms intervals
-
-### New Features
-- **Breathe Card**: Apple Watch-style breathing exercise with animated expanding circle
-  - 4 second inhale → 2 second hold → 6 second exhale cycle
-  - Calming teal gradient design
-  - Visual breathing guide
-
-### Improved
-- **Settings Card**: Theme preview strip showing current gradient + accent colors
-- **Dino Physics**: Realistic parabolic jump arc using velocity + gravity
-
-### Card Count: 27+ cards
