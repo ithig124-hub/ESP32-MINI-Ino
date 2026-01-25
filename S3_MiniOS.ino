@@ -33,18 +33,67 @@
 #include <math.h>
 
 // ============================================
-// CONFIGURATION
+// CONFIGURATION (Defaults - can be overridden by SD card)
 // ============================================
-const char* WIFI_SSID = "Optus_9D2E3D";
-const char* WIFI_PASSWORD = "snucktemptGLeQU";
+char wifiSSID[64] = "Optus_9D2E3D";
+char wifiPassword[64] = "snucktemptGLeQU";
+char weatherCity[32] = "Perth";  // Default city for weather
+char weatherCountry[8] = "AU";   // Country code
 const char* NTP_SERVER = "pool.ntp.org";
-const long GMT_OFFSET_SEC = 8 * 3600;
+long gmtOffsetSec = 8 * 3600;    // GMT+8 for Perth
 const int DAYLIGHT_OFFSET_SEC = 0;
 
 // API Keys
 const char* OPENWEATHER_API = "3795c13a0d3f7e17799d638edda60e3c";
 const char* ALPHAVANTAGE_API = "UHLX28BF7GQ4T8J3";
 const char* COINAPI_KEY = "11afad22-b6ea-4f18-9056-c7a1d7ed14a1";
+
+// Save interval - 2 hours to reduce lag
+#define SAVE_INTERVAL_MS 7200000  // 2 hours
+
+// ============================================
+// SD CARD WIFI CONFIG
+// ============================================
+#define WIFI_CONFIG_PATH "/wifi/config.txt"
+
+bool loadWiFiFromSD() {
+  File file = SD_MMC.open(WIFI_CONFIG_PATH, "r");
+  if (!file) {
+    USBSerial.println("No WiFi config on SD card, using defaults");
+    return false;
+  }
+  
+  while (file.available()) {
+    String line = file.readStringUntil('\n');
+    line.trim();
+    
+    if (line.startsWith("SSID=")) {
+      strncpy(wifiSSID, line.substring(5).c_str(), 63);
+      wifiSSID[63] = '\0';
+      USBSerial.printf("WiFi SSID from SD: %s\n", wifiSSID);
+    }
+    else if (line.startsWith("PASSWORD=")) {
+      strncpy(wifiPassword, line.substring(9).c_str(), 63);
+      wifiPassword[63] = '\0';
+      USBSerial.println("WiFi Password loaded from SD");
+    }
+    else if (line.startsWith("CITY=")) {
+      strncpy(weatherCity, line.substring(5).c_str(), 31);
+      weatherCity[31] = '\0';
+      USBSerial.printf("Weather city from SD: %s\n", weatherCity);
+    }
+    else if (line.startsWith("COUNTRY=")) {
+      strncpy(weatherCountry, line.substring(8).c_str(), 7);
+      weatherCountry[7] = '\0';
+    }
+    else if (line.startsWith("GMT_OFFSET=")) {
+      gmtOffsetSec = line.substring(11).toInt() * 3600;
+      USBSerial.printf("GMT offset: %ld\n", gmtOffsetSec);
+    }
+  }
+  file.close();
+  return true;
+}
 
 // ============================================
 // LVGL CONFIG
@@ -3288,12 +3337,10 @@ void brightnessSliderCb(lv_event_t *e) {
   lv_obj_t *slider = lv_event_get_target(e);
   userData.brightness = lv_slider_get_value(slider);
   gfx->setBrightness(userData.brightness);
-  saveUserData();
 }
 
 void themeChangeCb(lv_event_t *e) {
   userData.themeIndex = (userData.themeIndex + 1) % NUM_THEMES;
-  // Don't save immediately - will save on next auto-save cycle to reduce lag
   navigateTo(CAT_SETTINGS, 0);
 }
 
@@ -3305,77 +3352,97 @@ void timeoutChangeCb(lv_event_t *e) {
   }
   idx = (idx + 1) % 6;
   userData.screenTimeout = timeouts[idx];
-  saveUserData();
+  navigateTo(CAT_SETTINGS, 0);
+}
+
+void resetDataCb(lv_event_t *e) {
+  resetAllData();
   navigateTo(CAT_SETTINGS, 0);
 }
 
 void createSettingsCard() {
   GradientTheme &theme = gradientThemes[userData.themeIndex];
-  lv_obj_t *card = createCard("SETTINGS");
-  lv_obj_set_scrollbar_mode(card, LV_SCROLLBAR_MODE_OFF);
   
-  // Theme preview strip at top
+  // Scrollable settings card
+  lv_obj_t *card = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+  lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+  lv_obj_set_style_bg_color(card, lv_color_hex(0x1C1C1E), 0);
+  lv_obj_set_style_radius(card, 28, 0);
+  lv_obj_set_style_border_width(card, 0, 0);
+  lv_obj_set_scrollbar_mode(card, LV_SCROLLBAR_MODE_AUTO);
+  lv_obj_set_scroll_dir(card, LV_DIR_VER);
+  
+  lv_obj_t *title = lv_label_create(card);
+  lv_label_set_text(title, "SETTINGS");
+  lv_obj_set_style_text_color(title, lv_color_hex(0x8E8E93), 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 20, 10);
+  
+  // Location/Weather info row
+  lv_obj_t *locRow = lv_obj_create(card);
+  lv_obj_set_size(locRow, LCD_WIDTH - 70, 45);
+  lv_obj_align(locRow, LV_ALIGN_TOP_MID, 0, 35);
+  lv_obj_set_style_bg_color(locRow, lv_color_hex(0x007AFF), 0);
+  lv_obj_set_style_bg_opa(locRow, LV_OPA_20, 0);
+  lv_obj_set_style_radius(locRow, 12, 0);
+  lv_obj_set_style_border_width(locRow, 0, 0);
+  
+  lv_obj_t *locIcon = lv_label_create(locRow);
+  lv_label_set_text(locIcon, LV_SYMBOL_GPS);
+  lv_obj_set_style_text_color(locIcon, lv_color_hex(0x007AFF), 0);
+  lv_obj_align(locIcon, LV_ALIGN_LEFT_MID, 12, 0);
+  
+  char locBuf[48];
+  snprintf(locBuf, sizeof(locBuf), "%s, %s", weatherCity, weatherCountry);
+  lv_obj_t *locLbl = lv_label_create(locRow);
+  lv_label_set_text(locLbl, locBuf);
+  lv_obj_set_style_text_color(locLbl, lv_color_hex(0x007AFF), 0);
+  lv_obj_align(locLbl, LV_ALIGN_LEFT_MID, 35, 0);
+  
+  // Theme preview strip
   lv_obj_t *themePreview = lv_obj_create(card);
-  lv_obj_set_size(themePreview, LCD_WIDTH - 70, 50);
-  lv_obj_align(themePreview, LV_ALIGN_TOP_MID, 0, 20);
+  lv_obj_set_size(themePreview, LCD_WIDTH - 70, 45);
+  lv_obj_align(themePreview, LV_ALIGN_TOP_MID, 0, 90);
   lv_obj_set_style_bg_color(themePreview, theme.color1, 0);
   lv_obj_set_style_bg_grad_color(themePreview, theme.color2, 0);
   lv_obj_set_style_bg_grad_dir(themePreview, LV_GRAD_DIR_HOR, 0);
-  lv_obj_set_style_radius(themePreview, 25, 0);
+  lv_obj_set_style_radius(themePreview, 12, 0);
   lv_obj_set_style_border_width(themePreview, 0, 0);
-  lv_obj_set_style_pad_all(themePreview, 0, 0);
   lv_obj_add_flag(themePreview, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(themePreview, themeChangeCb, LV_EVENT_CLICKED, NULL);
   
-  // Theme name in preview
   lv_obj_t *thNameLbl = lv_label_create(themePreview);
   lv_label_set_text(thNameLbl, gradientThemes[userData.themeIndex].name);
   lv_obj_set_style_text_color(thNameLbl, theme.text, 0);
-  lv_obj_set_style_text_font(thNameLbl, &lv_font_montserrat_18, 0);
-  lv_obj_align(thNameLbl, LV_ALIGN_LEFT_MID, 20, 0);
+  lv_obj_set_style_text_font(thNameLbl, &lv_font_montserrat_14, 0);
+  lv_obj_align(thNameLbl, LV_ALIGN_LEFT_MID, 15, 0);
   
-  // Accent color dots
-  lv_obj_t *accentDot = lv_obj_create(themePreview);
-  lv_obj_set_size(accentDot, 24, 24);
-  lv_obj_align(accentDot, LV_ALIGN_RIGHT_MID, -60, 0);
-  lv_obj_set_style_bg_color(accentDot, theme.accent, 0);
-  lv_obj_set_style_radius(accentDot, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_border_width(accentDot, 0, 0);
-  
-  lv_obj_t *secDot = lv_obj_create(themePreview);
-  lv_obj_set_size(secDot, 24, 24);
-  lv_obj_align(secDot, LV_ALIGN_RIGHT_MID, -20, 0);
-  lv_obj_set_style_bg_color(secDot, theme.secondary, 0);
-  lv_obj_set_style_radius(secDot, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_border_width(secDot, 0, 0);
-  
-  // Tap hint
-  lv_obj_t *tapHint = lv_label_create(card);
-  lv_label_set_text(tapHint, "Tap to change theme");
-  lv_obj_set_style_text_color(tapHint, lv_color_hex(0x636366), 0);
-  lv_obj_set_style_text_font(tapHint, &lv_font_montserrat_12, 0);
-  lv_obj_align(tapHint, LV_ALIGN_TOP_MID, 0, 75);
+  lv_obj_t *thArrow = lv_label_create(themePreview);
+  lv_label_set_text(thArrow, LV_SYMBOL_RIGHT);
+  lv_obj_set_style_text_color(thArrow, theme.text, 0);
+  lv_obj_align(thArrow, LV_ALIGN_RIGHT_MID, -10, 0);
   
   // Brightness
   lv_obj_t *brRow = lv_obj_create(card);
-  lv_obj_set_size(brRow, LCD_WIDTH - 70, 70);
-  lv_obj_align(brRow, LV_ALIGN_TOP_MID, 0, 95);
+  lv_obj_set_size(brRow, LCD_WIDTH - 70, 65);
+  lv_obj_align(brRow, LV_ALIGN_TOP_MID, 0, 145);
   lv_obj_set_style_bg_color(brRow, lv_color_hex(0x2C2C2E), 0);
-  lv_obj_set_style_radius(brRow, 16, 0);
+  lv_obj_set_style_radius(brRow, 12, 0);
   lv_obj_set_style_border_width(brRow, 0, 0);
   
   lv_obj_t *brIcon = lv_label_create(brRow);
   lv_label_set_text(brIcon, LV_SYMBOL_IMAGE);
   lv_obj_set_style_text_color(brIcon, lv_color_hex(0xFFD60A), 0);
-  lv_obj_align(brIcon, LV_ALIGN_TOP_LEFT, 15, 8);
+  lv_obj_align(brIcon, LV_ALIGN_TOP_LEFT, 12, 8);
   
   lv_obj_t *brLbl = lv_label_create(brRow);
   lv_label_set_text(brLbl, "Brightness");
   lv_obj_set_style_text_color(brLbl, theme.text, 0);
-  lv_obj_align(brLbl, LV_ALIGN_TOP_LEFT, 40, 8);
+  lv_obj_align(brLbl, LV_ALIGN_TOP_LEFT, 35, 8);
   
   lv_obj_t *brSlider = lv_slider_create(brRow);
-  lv_obj_set_size(brSlider, LCD_WIDTH - 120, 12);
+  lv_obj_set_size(brSlider, LCD_WIDTH - 110, 10);
   lv_obj_align(brSlider, LV_ALIGN_BOTTOM_MID, 0, -12);
   lv_slider_set_range(brSlider, 20, 255);
   lv_slider_set_value(brSlider, userData.brightness, LV_ANIM_OFF);
@@ -3386,10 +3453,10 @@ void createSettingsCard() {
   
   // Screen Timeout
   lv_obj_t *toRow = lv_obj_create(card);
-  lv_obj_set_size(toRow, LCD_WIDTH - 70, 55);
-  lv_obj_align(toRow, LV_ALIGN_TOP_MID, 0, 175);
+  lv_obj_set_size(toRow, LCD_WIDTH - 70, 45);
+  lv_obj_align(toRow, LV_ALIGN_TOP_MID, 0, 220);
   lv_obj_set_style_bg_color(toRow, lv_color_hex(0x2C2C2E), 0);
-  lv_obj_set_style_radius(toRow, 16, 0);
+  lv_obj_set_style_radius(toRow, 12, 0);
   lv_obj_set_style_border_width(toRow, 0, 0);
   lv_obj_add_flag(toRow, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(toRow, timeoutChangeCb, LV_EVENT_CLICKED, NULL);
@@ -3397,42 +3464,64 @@ void createSettingsCard() {
   lv_obj_t *toIcon = lv_label_create(toRow);
   lv_label_set_text(toIcon, LV_SYMBOL_EYE_CLOSE);
   lv_obj_set_style_text_color(toIcon, lv_color_hex(0x8E8E93), 0);
-  lv_obj_align(toIcon, LV_ALIGN_LEFT_MID, 15, 0);
+  lv_obj_align(toIcon, LV_ALIGN_LEFT_MID, 12, 0);
   
   lv_obj_t *toLbl = lv_label_create(toRow);
   lv_label_set_text(toLbl, "Screen Timeout");
   lv_obj_set_style_text_color(toLbl, theme.text, 0);
-  lv_obj_align(toLbl, LV_ALIGN_LEFT_MID, 40, 0);
+  lv_obj_align(toLbl, LV_ALIGN_LEFT_MID, 35, 0);
   
   char tBuf[8];
   snprintf(tBuf, sizeof(tBuf), "%d min", userData.screenTimeout);
   lv_obj_t *toVal = lv_label_create(toRow);
   lv_label_set_text(toVal, tBuf);
   lv_obj_set_style_text_color(toVal, theme.accent, 0);
-  lv_obj_align(toVal, LV_ALIGN_RIGHT_MID, -15, 0);
+  lv_obj_align(toVal, LV_ALIGN_RIGHT_MID, -12, 0);
   
-  // Compass calibration
-  lv_obj_t *calRow = lv_obj_create(card);
-  lv_obj_set_size(calRow, LCD_WIDTH - 70, 55);
-  lv_obj_align(calRow, LV_ALIGN_TOP_MID, 0, 240);
-  lv_obj_set_style_bg_color(calRow, lv_color_hex(0x2C2C2E), 0);
-  lv_obj_set_style_radius(calRow, 16, 0);
-  lv_obj_set_style_border_width(calRow, 0, 0);
+  // WiFi Status
+  lv_obj_t *wifiRow = lv_obj_create(card);
+  lv_obj_set_size(wifiRow, LCD_WIDTH - 70, 45);
+  lv_obj_align(wifiRow, LV_ALIGN_TOP_MID, 0, 275);
+  lv_obj_set_style_bg_color(wifiRow, lv_color_hex(0x2C2C2E), 0);
+  lv_obj_set_style_radius(wifiRow, 12, 0);
+  lv_obj_set_style_border_width(wifiRow, 0, 0);
   
-  lv_obj_t *calIcon = lv_label_create(calRow);
-  lv_label_set_text(calIcon, LV_SYMBOL_GPS);
-  lv_obj_set_style_text_color(calIcon, lv_color_hex(0xFF453A), 0);
-  lv_obj_align(calIcon, LV_ALIGN_LEFT_MID, 15, 0);
+  lv_obj_t *wifiIcon = lv_label_create(wifiRow);
+  lv_label_set_text(wifiIcon, LV_SYMBOL_WIFI);
+  lv_obj_set_style_text_color(wifiIcon, wifiConnected ? lv_color_hex(0x30D158) : lv_color_hex(0xFF453A), 0);
+  lv_obj_align(wifiIcon, LV_ALIGN_LEFT_MID, 12, 0);
   
-  lv_obj_t *calLbl = lv_label_create(calRow);
-  lv_label_set_text(calLbl, "Calibrate Compass");
-  lv_obj_set_style_text_color(calLbl, theme.text, 0);
-  lv_obj_align(calLbl, LV_ALIGN_LEFT_MID, 40, 0);
+  lv_obj_t *wifiLbl = lv_label_create(wifiRow);
+  lv_label_set_text(wifiLbl, "WiFi");
+  lv_obj_set_style_text_color(wifiLbl, theme.text, 0);
+  lv_obj_align(wifiLbl, LV_ALIGN_LEFT_MID, 35, 0);
   
-  lv_obj_t *calArrow = lv_label_create(calRow);
-  lv_label_set_text(calArrow, LV_SYMBOL_RIGHT);
-  lv_obj_set_style_text_color(calArrow, lv_color_hex(0x636366), 0);
-  lv_obj_align(calArrow, LV_ALIGN_RIGHT_MID, -15, 0);
+  lv_obj_t *wifiVal = lv_label_create(wifiRow);
+  lv_label_set_text(wifiVal, wifiConnected ? wifiSSID : "Not Connected");
+  lv_obj_set_style_text_color(wifiVal, wifiConnected ? lv_color_hex(0x30D158) : lv_color_hex(0xFF453A), 0);
+  lv_obj_set_style_text_font(wifiVal, &lv_font_montserrat_12, 0);
+  lv_obj_align(wifiVal, LV_ALIGN_RIGHT_MID, -12, 0);
+  
+  // RESET ALL DATA button (danger zone)
+  lv_obj_t *resetBtn = lv_btn_create(card);
+  lv_obj_set_size(resetBtn, LCD_WIDTH - 70, 50);
+  lv_obj_align(resetBtn, LV_ALIGN_TOP_MID, 0, 340);
+  lv_obj_set_style_bg_color(resetBtn, lv_color_hex(0xFF453A), 0);
+  lv_obj_set_style_radius(resetBtn, 12, 0);
+  lv_obj_add_event_cb(resetBtn, resetDataCb, LV_EVENT_CLICKED, NULL);
+  
+  lv_obj_t *resetLbl = lv_label_create(resetBtn);
+  lv_label_set_text(resetLbl, "Reset All Data");
+  lv_obj_set_style_text_color(resetLbl, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_text_font(resetLbl, &lv_font_montserrat_16, 0);
+  lv_obj_center(resetLbl);
+  
+  // Version info
+  lv_obj_t *verLbl = lv_label_create(card);
+  lv_label_set_text(verLbl, "Widget OS v2.2");
+  lv_obj_set_style_text_color(verLbl, lv_color_hex(0x636366), 0);
+  lv_obj_set_style_text_font(verLbl, &lv_font_montserrat_12, 0);
+  lv_obj_align(verLbl, LV_ALIGN_TOP_MID, 0, 405);
 }
 
 // ============================================
@@ -3699,12 +3788,41 @@ void loadUserData() {
   }
 }
 
+// Reset all user data to defaults
+void resetAllData() {
+  userData.steps = 0;
+  userData.dailyGoal = 10000;
+  userData.stepStreak = 0;
+  userData.blackjackStreak = 0;
+  userData.gamesWon = 0;
+  userData.gamesPlayed = 0;
+  userData.brightness = 200;
+  userData.screenTimeout = 1;
+  userData.themeIndex = 0;
+  userData.totalDistance = 0.0;
+  userData.totalCalories = 0.0;
+  userData.compassMode = 0;
+  userData.wallpaperIndex = 0;
+  
+  // Delete saved data file
+  if (SPIFFS.begin(true)) {
+    SPIFFS.remove("/userdata.bin");
+  }
+  
+  // Reset compass calibration
+  compassCalibrated = false;
+  initialYaw = 0;
+  roll = pitch = yaw = 0;
+  
+  USBSerial.println("All data reset to defaults");
+}
+
 // ============================================
 // NTP TIME SYNC
 // ============================================
 void syncTimeNTP() {
   if (WiFi.status() != WL_CONNECTED) return;
-  configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+  configTime(gmtOffsetSec, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
   struct tm timeinfo;
   if (getLocalTime(&timeinfo)) {
     rtc.setDateTime(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
@@ -3718,7 +3836,11 @@ void syncTimeNTP() {
 void fetchWeatherData() {
   if (WiFi.status() != WL_CONNECTED) return;
   HTTPClient http;
-  String url = "http://api.openweathermap.org/data/2.5/weather?q=Sydney&units=metric&appid=";
+  String url = "http://api.openweathermap.org/data/2.5/weather?q=";
+  url += weatherCity;
+  url += ",";
+  url += weatherCountry;
+  url += "&units=metric&appid=";
   url += OPENWEATHER_API;
   http.begin(url);
   int code = http.GET();
@@ -3855,30 +3977,37 @@ void setup() {
   esp_timer_create(&tick_args, &tick_timer);
   esp_timer_start_periodic(tick_timer, LVGL_TICK_PERIOD_MS * 1000);
   
-  // WiFi
+  // SD Card - Initialize FIRST to load WiFi config
+  SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
+  if (SD_MMC.begin("/sdcard", true)) {
+    USBSerial.println("SD Card mounted successfully");
+    loadWiFiFromSD();      // Load WiFi credentials from /wifi/config.txt
+    scanSDWallpapers();    // Scan /wallpaper folder for images
+  } else {
+    USBSerial.println("SD Card mount failed - using defaults");
+  }
+  
+  // WiFi - Connect using credentials (from SD or defaults)
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(wifiSSID, wifiPassword);
+  USBSerial.printf("Connecting to WiFi: %s\n", wifiSSID);
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
     attempts++;
   }
   wifiConnected = (WiFi.status() == WL_CONNECTED);
+  if (wifiConnected) {
+    USBSerial.println("WiFi Connected!");
+  } else {
+    USBSerial.println("WiFi Connection Failed");
+  }
   
   // Sync time and fetch data if connected
   if (wifiConnected) {
     syncTimeNTP();
     fetchWeatherData();
     fetchCryptoData();
-  }
-  
-  // SD Card - Initialize and scan for wallpapers
-  SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
-  if (SD_MMC.begin("/sdcard", true)) {
-    USBSerial.println("SD Card mounted successfully");
-    scanSDWallpapers();  // Scan /wallpaper folder for images
-  } else {
-    USBSerial.println("SD Card mount failed - using gradient wallpapers");
   }
   
   lastActivityMs = millis();
@@ -4052,10 +4181,11 @@ void loop() {
   }
   
   // =========================================
-  // SAVE DATA (every 30 seconds)
+  // =========================================
+  // SAVE DATA (every 2 hours to reduce lag)
   // =========================================
   static unsigned long lastSave = 0;
-  if (millis() - lastSave > 30000) {
+  if (millis() - lastSave > SAVE_INTERVAL_MS) {
     lastSave = millis();
     saveUserData();
   }
