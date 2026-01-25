@@ -1,16 +1,17 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- *  S3 MiniOS v3.0 - ESP32-S3-Touch-AMOLED-1.8 Firmware
- *  ENHANCED EDITION WITH SD WIFI, POWER CONTROLS & BATTERY ESTIMATION
+ *  S3 MiniOS v3.1 - ESP32-S3-Touch-AMOLED-1.8 Firmware
+ *  FULL BATTERY INTELLIGENCE EDITION
  * ═══════════════════════════════════════════════════════════════════════════
  * 
- *  NEW FEATURES:
- *  - WiFi auto-connect from SD card (/wifi/config.txt)
- *  - Stats save every 2 hours (reduced lag)
- *  - Factory reset button (data only, preserves sketch & SD)
- *  - Weather based on WiFi/IP geolocation
- *  - Instant ON/OFF button, long press for shutdown
- *  - Battery time estimate on System card
+ *  NEW IN v3.1:
+ *  - Advanced sleep mode tracking
+ *  - Usage pattern learning (ML-style)
+ *  - Battery Stats sub-card with graphs
+ *  - Mini battery estimate on all cards
+ *  - Low battery warning popup
+ *  - Battery saver mode
+ *  - Charging animation
  * 
  *  Hardware: Waveshare ESP32-S3-Touch-AMOLED-1.8
  *    • Display: SH8601 QSPI AMOLED 368x448
@@ -52,7 +53,6 @@
 #define IIC_SCL         14
 #define TP_INT          21
 
-// SD Card (SDMMC 1-bit mode)
 #define SDMMC_CLK       2
 #define SDMMC_CMD       1
 #define SDMMC_DATA      3
@@ -67,38 +67,42 @@
 //  CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Save interval - 2 hours to reduce lag (was 30 seconds)
-#define SAVE_INTERVAL_MS 7200000UL  // 2 hours = 7,200,000 ms
-
-// WiFi config file path on SD card
+#define SAVE_INTERVAL_MS 7200000UL  // 2 hours
 #define WIFI_CONFIG_PATH "/wifi/config.txt"
+#define BUTTON_LONG_PRESS_MS 3000
+#define SCREEN_OFF_TIMEOUT_MS 30000
+#define SCREEN_OFF_TIMEOUT_SAVER_MS 10000  // Battery saver mode
 
-// Button timing
-#define BUTTON_LONG_PRESS_MS 3000  // 3 seconds for shutdown
-#define SCREEN_OFF_TIMEOUT_MS 30000  // 30 seconds
-
-// Battery estimation (3.7V 500mAh typical for this board)
+// Battery specs
 #define BATTERY_CAPACITY_MAH 500
-#define SCREEN_ON_CURRENT_MA 80   // ~80mA with screen on
-#define SCREEN_OFF_CURRENT_MA 15  // ~15mA deep sleep
+#define SCREEN_ON_CURRENT_MA 80
+#define SCREEN_OFF_CURRENT_MA 15
+#define SAVER_MODE_CURRENT_MA 40
+
+// Low battery threshold
+#define LOW_BATTERY_WARNING 20
+#define CRITICAL_BATTERY_WARNING 10
+
+// Usage tracking
+#define USAGE_HISTORY_SIZE 24  // 24 hours of hourly data
+#define CARD_USAGE_SLOTS 6     // Number of main cards
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  WIFI CONFIGURATION (loaded from SD or defaults)
+//  WIFI CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════
 
 char wifiSSID[64] = "";
 char wifiPassword[64] = "";
 char weatherCity[64] = "Perth";
 char weatherCountry[8] = "AU";
-long gmtOffsetSec = 8 * 3600;  // GMT+8 for Perth
+long gmtOffsetSec = 8 * 3600;
 bool wifiConfigFromSD = false;
 bool wifiConnected = false;
 
-// API Key (OpenWeatherMap free tier)
 const char* OPENWEATHER_API = "3795c13a0d3f7e17799d638edda60e3c";
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  THEME (Modern AMOLED Design)
+//  THEME COLORS
 // ═══════════════════════════════════════════════════════════════════════════
 
 #define COL_BG          0x0000
@@ -108,15 +112,16 @@ const char* OPENWEATHER_API = "3795c13a0d3f7e17799d638edda60e3c";
 #define COL_TEXT_DIM    0x7BEF
 #define COL_TEXT_DIMMER 0x4208
 
-#define COL_CLOCK       0x07FF   // Cyan
-#define COL_STEPS       0x5E5F   // Purple-blue
-#define COL_MUSIC       0xF81F   // Magenta
-#define COL_GAMES       0xFD20   // Orange
-#define COL_WEATHER     0x07E0   // Green
-#define COL_SYSTEM      0xFFE0   // Yellow
+#define COL_CLOCK       0x07FF
+#define COL_STEPS       0x5E5F
+#define COL_MUSIC       0xF81F
+#define COL_GAMES       0xFD20
+#define COL_WEATHER     0x07E0
+#define COL_SYSTEM      0xFFE0
 #define COL_SUCCESS     0x07E0
 #define COL_WARNING     0xFD20
 #define COL_DANGER      0xF800
+#define COL_CHARGING    0x07FF
 
 #define MARGIN          12
 #define CARD_RADIUS     16
@@ -148,35 +153,12 @@ enum MainCard {
 
 enum SubCard {
     SUB_NONE = 0,
-    
-    // Clock sub-cards (1-9)
     SUB_CLOCK_WORLD = 1,
-    SUB_CLOCK_DATE = 2,
-    SUB_CLOCK_ALARM = 3,
-    
-    // Steps sub-cards (10-19)
     SUB_STEPS_GRAPH = 10,
-    SUB_STEPS_DISTANCE = 11,
-    SUB_STEPS_DEBUG = 12,
-    
-    // Music sub-cards (20-29)
-    SUB_MUSIC_PLAYLIST = 20,
-    SUB_MUSIC_PLAYER = 21,
-    
-    // Games sub-cards (30-39)
-    SUB_GAMES_YESNO = 30,
-    SUB_GAMES_CLICKER = 31,
-    SUB_GAMES_REACTION = 32,
-    
-    // Weather sub-cards (40-49)
-    SUB_WEATHER_FORECAST = 40,
-    SUB_WEATHER_DETAILS = 41,
-    
-    // System sub-cards (50-59)
-    SUB_SYSTEM_STATS = 50,
-    SUB_SYSTEM_INFO = 51,
+    SUB_GAMES_CLICKER = 30,
     SUB_SYSTEM_RESET = 52,
-    SUB_SYSTEM_BATTERY = 53
+    SUB_SYSTEM_BATTERY_STATS = 53,
+    SUB_SYSTEM_USAGE = 54
 };
 
 MainCard currentMainCard = CARD_CLOCK;
@@ -199,6 +181,58 @@ bool gestureInProgress = false;
 #define SWIPE_TIMEOUT 500
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  BATTERY INTELLIGENCE SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct BatteryStats {
+    // Current session tracking
+    uint32_t screenOnTimeMs;
+    uint32_t screenOffTimeMs;
+    uint32_t sessionStartMs;
+    
+    // Historical data (24 hours, hourly buckets)
+    uint16_t hourlyScreenOnMins[USAGE_HISTORY_SIZE];
+    uint16_t hourlyScreenOffMins[USAGE_HISTORY_SIZE];
+    uint16_t hourlySteps[USAGE_HISTORY_SIZE];
+    uint8_t currentHourIndex;
+    
+    // Card usage tracking
+    uint32_t cardUsageTime[CARD_USAGE_SLOTS];  // ms spent on each card
+    
+    // Battery drain tracking
+    uint8_t batteryAtHourStart;
+    float avgDrainPerHour;
+    float weightedDrainRate;  // More weight on recent data
+    
+    // Learning data (7 days)
+    float dailyAvgScreenOnHours[7];
+    float dailyAvgDrainRate[7];
+    uint8_t currentDayIndex;
+    
+    // Computed estimates
+    uint32_t simpleEstimateMins;
+    uint32_t weightedEstimateMins;
+    uint32_t learnedEstimateMins;
+    uint32_t combinedEstimateMins;
+};
+
+BatteryStats batteryStats = {0};
+
+// Battery saver mode
+bool batterySaverMode = false;
+bool batterySaverAutoEnabled = false;
+
+// Low battery warning
+bool lowBatteryWarningShown = false;
+bool criticalBatteryWarningShown = false;
+unsigned long lowBatteryPopupTime = 0;
+bool showingLowBatteryPopup = false;
+
+// Charging animation
+uint8_t chargingAnimFrame = 0;
+unsigned long lastChargingAnimMs = 0;
+
+// ═══════════════════════════════════════════════════════════════════════════
 //  GLOBAL STATE
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -206,54 +240,47 @@ bool gestureInProgress = false;
 uint8_t clockHour = 10, clockMinute = 30, clockSecond = 0;
 uint8_t lastSecond = 255;
 const char* daysOfWeek[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-uint8_t currentDay = 3; // Wednesday
+uint8_t currentDay = 3;
 
 // Steps
 uint32_t stepCount = 0;
 uint32_t stepGoal = 10000;
-uint32_t stepHistory[7] = {0, 0, 0, 0, 0, 0, 0};
+uint32_t stepHistory[7] = {0};
 
 // Music
 bool musicPlaying = false;
-uint8_t musicProgress = 35;
-const char* musicTitle = "Night Drive";
-const char* musicArtist = "Synthwave FM";
 uint16_t musicDuration = 245;
 uint16_t musicCurrent = 86;
+const char* musicTitle = "Night Drive";
+const char* musicArtist = "Synthwave FM";
 
 // Games
 uint8_t spotlightGame = 0;
 unsigned long lastGameRotate = 0;
 uint32_t clickerScore = 0;
-uint16_t reactionTime = 0;
-bool reactionWaiting = false;
-unsigned long reactionStartTime = 0;
 
-// Weather (updated from API or IP geolocation)
+// Weather
 int8_t weatherTemp = 22;
 char weatherCondition[32] = "Sunny";
 uint8_t weatherHumidity = 65;
 uint16_t weatherWind = 12;
-int8_t forecast[5] = {22, 24, 23, 21, 20};
 char weatherLocation[64] = "Perth, AU";
 
-// System stats
-uint8_t cpuUsage = 45;
+// System
 uint32_t freeRAM = 234567;
-float temperature = 42.5;
-uint16_t fps = 60;
 
 // Battery
 uint16_t batteryVoltage = 4100;
 uint8_t batteryPercent = 85;
-uint32_t batteryEstimateMinutes = 0;
+bool isCharging = false;
 
 // Screen state
 bool screenOn = true;
 unsigned long lastActivityMs = 0;
-unsigned long screenOffTime = 0;
+unsigned long screenOnStartMs = 0;
+unsigned long screenOffStartMs = 0;
 
-// Button state for power control
+// Button
 unsigned long buttonPressStart = 0;
 bool buttonPressed = false;
 
@@ -261,10 +288,11 @@ bool buttonPressed = false;
 unsigned long lastClockUpdate = 0;
 unsigned long lastStepUpdate = 0;
 unsigned long lastBatteryUpdate = 0;
-unsigned long lastStatsUpdate = 0;
 unsigned long lastMusicUpdate = 0;
 unsigned long lastSaveTime = 0;
 unsigned long lastWeatherUpdate = 0;
+unsigned long lastUsageUpdate = 0;
+unsigned long lastHourlyUpdate = 0;
 
 // Hardware flags
 bool hasIMU = false, hasRTC = false, hasPMU = false, hasSD = false;
@@ -275,7 +303,6 @@ Preferences prefs;
 // Touch
 int16_t touchX = -1, touchY = -1;
 bool lastTouchState = false;
-unsigned long touchDebounce = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARDWARE DRIVERS
@@ -297,9 +324,6 @@ public:
         uint8_t o = readReg(0x01);
         if (val) o |= (1 << pin); else o &= ~(1 << pin);
         writeReg(0x01, o);
-    }
-    uint8_t digitalRead(uint8_t pin) {
-        return (readReg(0x00) >> pin) & 0x01;
     }
 private:
     uint8_t _addr;
@@ -330,10 +354,8 @@ public:
     void getDate(uint8_t *day, uint8_t *weekday, uint8_t *month, uint8_t *year) {
         Wire.beginTransmission(PCF85063_ADDR); Wire.write(0x07); Wire.endTransmission();
         Wire.requestFrom(PCF85063_ADDR,(uint8_t)4);
-        *day = bcd(Wire.read()&0x3F);
-        *weekday = Wire.read()&0x07;
-        *month = bcd(Wire.read()&0x1F);
-        *year = bcd(Wire.read());
+        *day = bcd(Wire.read()&0x3F); *weekday = Wire.read()&0x07;
+        *month = bcd(Wire.read()&0x1F); *year = bcd(Wire.read());
     }
 private:
     uint8_t bcd(uint8_t b) { return ((b>>4)*10)+(b&0x0F); }
@@ -345,10 +367,7 @@ public:
     uint16_t getBattVoltage() { uint8_t h=readReg(0x34),l=readReg(0x35); return ((h&0x3F)<<8)|l; }
     uint8_t getBattPercent() { return readReg(0xA4)&0x7F; }
     bool isCharging() { return (readReg(0x01) & 0x04) != 0; }
-    void powerOff() {
-        // Set shutdown bit
-        writeReg(0x10, readReg(0x10) | 0x01);
-    }
+    void powerOff() { writeReg(0x10, readReg(0x10) | 0x01); }
 private:
     uint8_t readReg(uint8_t r) { Wire.beginTransmission(AXP2101_ADDR); Wire.write(r); Wire.endTransmission(); Wire.requestFrom(AXP2101_ADDR,(uint8_t)1); return Wire.read(); }
     void writeReg(uint8_t r, uint8_t v) { Wire.beginTransmission(AXP2101_ADDR); Wire.write(r); Wire.write(v); Wire.endTransmission(); }
@@ -361,8 +380,7 @@ public:
         if (Wire.endTransmission() != 0) return false;
         if (readReg(0x00) != 0x05) return false;
         writeReg(0x60, 0xB0); delay(10);
-        writeReg(0x03, 0x02);
-        writeReg(0x08, 0x01);
+        writeReg(0x03, 0x02); writeReg(0x08, 0x01);
         return true;
     }
     void getAccel(float *x, float *y, float *z) {
@@ -385,205 +403,96 @@ AXP2101 pmu;
 QMI8658 imu;
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  SD CARD WIFI CONFIGURATION
+//  SD CARD & WIFI
 // ═══════════════════════════════════════════════════════════════════════════
 
 bool initSDCard() {
     SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
-    if (!SD_MMC.begin("/sdcard", true, true)) {  // 1-bit mode
-        Serial.println("[WARN] SD Card mount failed");
-        return false;
-    }
-    Serial.println("[OK] SD Card mounted");
+    if (!SD_MMC.begin("/sdcard", true, true)) return false;
+    Serial.println("[OK] SD Card");
     return true;
 }
 
 void createWiFiTemplate() {
-    // Create /wifi folder if not exists
-    if (!SD_MMC.exists("/wifi")) {
-        SD_MMC.mkdir("/wifi");
-    }
-    
-    // Create template config file
+    if (!SD_MMC.exists("/wifi")) SD_MMC.mkdir("/wifi");
     File file = SD_MMC.open(WIFI_CONFIG_PATH, "w");
     if (file) {
-        file.println("# WiFi Configuration for S3 MiniOS");
-        file.println("# Edit this file with your WiFi credentials");
-        file.println("# The watch will auto-connect on boot");
-        file.println("#");
-        file.println("# Format: KEY=VALUE (no spaces around =)");
-        file.println("#");
+        file.println("# WiFi Config for S3 MiniOS");
         file.println("SSID=YourWiFiName");
-        file.println("PASSWORD=YourWiFiPassword");
-        file.println("#");
-        file.println("# Optional: Override weather location");
-        file.println("# Leave blank to auto-detect from IP");
+        file.println("PASSWORD=YourPassword");
         file.println("CITY=Perth");
         file.println("COUNTRY=AU");
-        file.println("#");
-        file.println("# Timezone offset in hours from GMT");
         file.println("GMT_OFFSET=8");
         file.close();
-        Serial.println("[OK] Created WiFi template: " WIFI_CONFIG_PATH);
     }
 }
 
 bool loadWiFiFromSD() {
     if (!hasSD) return false;
-    
     File file = SD_MMC.open(WIFI_CONFIG_PATH, "r");
-    if (!file) {
-        Serial.println("[INFO] No WiFi config found, creating template...");
-        createWiFiTemplate();
-        return false;
-    }
-    
-    Serial.println("[INFO] Loading WiFi config from SD card...");
+    if (!file) { createWiFiTemplate(); return false; }
     
     while (file.available()) {
         String line = file.readStringUntil('\n');
         line.trim();
-        
-        // Skip comments and empty lines
         if (line.startsWith("#") || line.length() == 0) continue;
-        
         int eqPos = line.indexOf('=');
         if (eqPos < 0) continue;
-        
         String key = line.substring(0, eqPos);
         String value = line.substring(eqPos + 1);
-        key.trim();
-        value.trim();
+        key.trim(); value.trim();
         
-        if (key == "SSID" && value.length() > 0) {
-            strncpy(wifiSSID, value.c_str(), 63);
-            wifiSSID[63] = '\0';
-            Serial.printf("  SSID: %s\n", wifiSSID);
-        }
-        else if (key == "PASSWORD") {
-            strncpy(wifiPassword, value.c_str(), 63);
-            wifiPassword[63] = '\0';
-            Serial.println("  Password: ****");
-        }
-        else if (key == "CITY" && value.length() > 0) {
-            strncpy(weatherCity, value.c_str(), 63);
-            weatherCity[63] = '\0';
-            Serial.printf("  City: %s\n", weatherCity);
-        }
-        else if (key == "COUNTRY" && value.length() > 0) {
-            strncpy(weatherCountry, value.c_str(), 7);
-            weatherCountry[7] = '\0';
-        }
-        else if (key == "GMT_OFFSET") {
-            gmtOffsetSec = value.toInt() * 3600;
-            Serial.printf("  GMT Offset: %ld\n", gmtOffsetSec / 3600);
-        }
+        if (key == "SSID") strncpy(wifiSSID, value.c_str(), 63);
+        else if (key == "PASSWORD") strncpy(wifiPassword, value.c_str(), 63);
+        else if (key == "CITY") strncpy(weatherCity, value.c_str(), 63);
+        else if (key == "COUNTRY") strncpy(weatherCountry, value.c_str(), 7);
+        else if (key == "GMT_OFFSET") gmtOffsetSec = value.toInt() * 3600;
     }
     file.close();
-    
     wifiConfigFromSD = (strlen(wifiSSID) > 0);
     return wifiConfigFromSD;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  WIFI CONNECTION & IP GEOLOCATION
-// ═══════════════════════════════════════════════════════════════════════════
-
 void connectWiFi() {
-    if (strlen(wifiSSID) == 0) {
-        Serial.println("[WARN] No WiFi SSID configured");
-        return;
-    }
-    
-    Serial.printf("[INFO] Connecting to WiFi: %s\n", wifiSSID);
+    if (strlen(wifiSSID) == 0) return;
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifiSSID, wifiPassword);
-    
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-        delay(500);
-        Serial.print(".");
-        attempts++;
-    }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-        wifiConnected = true;
-        Serial.printf("\n[OK] WiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
-        
-        // Get location from IP if city not specified
-        if (strlen(weatherCity) == 0 || strcmp(weatherCity, "Perth") == 0) {
-            getLocationFromIP();
-        }
-    } else {
-        Serial.println("\n[WARN] WiFi connection failed");
-    }
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) { delay(500); attempts++; }
+    wifiConnected = (WiFi.status() == WL_CONNECTED);
+    if (wifiConnected) Serial.printf("[OK] WiFi: %s\n", WiFi.localIP().toString().c_str());
 }
 
 void getLocationFromIP() {
     if (!wifiConnected) return;
-    
     HTTPClient http;
-    http.begin("http://ip-api.com/json/?fields=city,country,countryCode,timezone");
+    http.begin("http://ip-api.com/json/?fields=city,countryCode");
     http.setTimeout(5000);
-    
-    int httpCode = http.GET();
-    if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
-        
-        DynamicJsonDocument doc(512);
-        if (deserializeJson(doc, payload) == DeserializationError::Ok) {
-            const char* city = doc["city"];
-            const char* countryCode = doc["countryCode"];
-            
-            if (city && strlen(city) > 0) {
-                strncpy(weatherCity, city, 63);
-                weatherCity[63] = '\0';
-            }
-            if (countryCode && strlen(countryCode) > 0) {
-                strncpy(weatherCountry, countryCode, 7);
-                weatherCountry[7] = '\0';
-            }
-            
-            snprintf(weatherLocation, 63, "%s, %s", weatherCity, weatherCountry);
-            Serial.printf("[OK] Location from IP: %s\n", weatherLocation);
+    if (http.GET() == HTTP_CODE_OK) {
+        DynamicJsonDocument doc(256);
+        if (deserializeJson(doc, http.getString()) == DeserializationError::Ok) {
+            if (doc["city"]) strncpy(weatherCity, doc["city"], 63);
+            if (doc["countryCode"]) strncpy(weatherCountry, doc["countryCode"], 7);
         }
     }
     http.end();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  WEATHER API
-// ═══════════════════════════════════════════════════════════════════════════
-
 void fetchWeather() {
     if (!wifiConnected) return;
-    
     char url[256];
-    snprintf(url, sizeof(url),
-        "http://api.openweathermap.org/data/2.5/weather?q=%s,%s&appid=%s&units=metric",
+    snprintf(url, sizeof(url), "http://api.openweathermap.org/data/2.5/weather?q=%s,%s&appid=%s&units=metric",
         weatherCity, weatherCountry, OPENWEATHER_API);
-    
     HTTPClient http;
     http.begin(url);
     http.setTimeout(5000);
-    
-    int httpCode = http.GET();
-    if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
-        
+    if (http.GET() == HTTP_CODE_OK) {
         DynamicJsonDocument doc(1024);
-        if (deserializeJson(doc, payload) == DeserializationError::Ok) {
+        if (deserializeJson(doc, http.getString()) == DeserializationError::Ok) {
             weatherTemp = (int8_t)doc["main"]["temp"].as<float>();
             weatherHumidity = doc["main"]["humidity"].as<uint8_t>();
             weatherWind = (uint16_t)doc["wind"]["speed"].as<float>();
-            
-            const char* desc = doc["weather"][0]["main"];
-            if (desc) {
-                strncpy(weatherCondition, desc, 31);
-                weatherCondition[31] = '\0';
-            }
-            
-            Serial.printf("[OK] Weather: %d°C, %s\n", weatherTemp, weatherCondition);
+            if (doc["weather"][0]["main"]) strncpy(weatherCondition, doc["weather"][0]["main"], 31);
         }
     }
     http.end();
@@ -591,7 +500,158 @@ void fetchWeather() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  DATA PERSISTENCE (every 2 hours)
+//  BATTERY INTELLIGENCE FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+void updateUsageTracking() {
+    unsigned long now = millis();
+    
+    // Update screen time counters
+    if (screenOn) {
+        batteryStats.screenOnTimeMs += (now - lastUsageUpdate);
+        batteryStats.cardUsageTime[currentMainCard] += (now - lastUsageUpdate);
+    } else {
+        batteryStats.screenOffTimeMs += (now - lastUsageUpdate);
+    }
+    
+    lastUsageUpdate = now;
+}
+
+void updateHourlyStats() {
+    // Called every hour or when hour changes
+    uint8_t hourIndex = clockHour % USAGE_HISTORY_SIZE;
+    
+    // Store current hour data
+    batteryStats.hourlyScreenOnMins[hourIndex] = batteryStats.screenOnTimeMs / 60000;
+    batteryStats.hourlyScreenOffMins[hourIndex] = batteryStats.screenOffTimeMs / 60000;
+    batteryStats.hourlySteps[hourIndex] = stepCount;
+    
+    // Calculate drain rate for this hour
+    uint8_t currentBattery = batteryPercent;
+    if (batteryStats.batteryAtHourStart > currentBattery) {
+        float drainThisHour = batteryStats.batteryAtHourStart - currentBattery;
+        
+        // Update average drain rate
+        batteryStats.avgDrainPerHour = (batteryStats.avgDrainPerHour * 0.8f) + (drainThisHour * 0.2f);
+        
+        // Weighted drain rate (more recent = more weight)
+        batteryStats.weightedDrainRate = (batteryStats.weightedDrainRate * 0.6f) + (drainThisHour * 0.4f);
+    }
+    
+    batteryStats.batteryAtHourStart = currentBattery;
+    batteryStats.currentHourIndex = hourIndex;
+    
+    // Reset session counters for new hour
+    batteryStats.screenOnTimeMs = 0;
+    batteryStats.screenOffTimeMs = 0;
+    
+    lastHourlyUpdate = millis();
+}
+
+void updateDailyStats() {
+    // Called at midnight or day change
+    uint8_t dayIndex = currentDay % 7;
+    
+    // Calculate total screen on time for the day
+    float totalOnHours = 0;
+    for (int i = 0; i < USAGE_HISTORY_SIZE; i++) {
+        totalOnHours += batteryStats.hourlyScreenOnMins[i] / 60.0f;
+    }
+    
+    batteryStats.dailyAvgScreenOnHours[dayIndex] = totalOnHours;
+    batteryStats.dailyAvgDrainRate[dayIndex] = batteryStats.avgDrainPerHour;
+    batteryStats.currentDayIndex = dayIndex;
+}
+
+void calculateBatteryEstimates() {
+    float remainingCapacity = (BATTERY_CAPACITY_MAH * batteryPercent) / 100.0f;
+    
+    // 1. Simple estimate (based on current mode)
+    float currentDraw = batterySaverMode ? SAVER_MODE_CURRENT_MA : 
+                        (screenOn ? SCREEN_ON_CURRENT_MA : SCREEN_OFF_CURRENT_MA);
+    batteryStats.simpleEstimateMins = (uint32_t)((remainingCapacity / currentDraw) * 60.0f);
+    
+    // 2. Weighted estimate (based on recent usage pattern)
+    if (batteryStats.weightedDrainRate > 0.1f) {
+        batteryStats.weightedEstimateMins = (uint32_t)((batteryPercent / batteryStats.weightedDrainRate) * 60.0f);
+    } else {
+        batteryStats.weightedEstimateMins = batteryStats.simpleEstimateMins;
+    }
+    
+    // 3. Learned estimate (based on historical patterns)
+    float avgDailyOnHours = 0;
+    float avgDailyDrain = 0;
+    int validDays = 0;
+    
+    for (int i = 0; i < 7; i++) {
+        if (batteryStats.dailyAvgScreenOnHours[i] > 0) {
+            avgDailyOnHours += batteryStats.dailyAvgScreenOnHours[i];
+            avgDailyDrain += batteryStats.dailyAvgDrainRate[i];
+            validDays++;
+        }
+    }
+    
+    if (validDays > 0 && avgDailyDrain > 0) {
+        avgDailyOnHours /= validDays;
+        avgDailyDrain /= validDays;
+        batteryStats.learnedEstimateMins = (uint32_t)((batteryPercent / avgDailyDrain) * 60.0f);
+    } else {
+        batteryStats.learnedEstimateMins = batteryStats.simpleEstimateMins;
+    }
+    
+    // 4. Combined estimate (weighted average of all three)
+    batteryStats.combinedEstimateMins = (
+        batteryStats.simpleEstimateMins * 30 +
+        batteryStats.weightedEstimateMins * 40 +
+        batteryStats.learnedEstimateMins * 30
+    ) / 100;
+}
+
+void checkLowBattery() {
+    if (isCharging) {
+        lowBatteryWarningShown = false;
+        criticalBatteryWarningShown = false;
+        showingLowBatteryPopup = false;
+        return;
+    }
+    
+    if (batteryPercent <= CRITICAL_BATTERY_WARNING && !criticalBatteryWarningShown) {
+        criticalBatteryWarningShown = true;
+        showingLowBatteryPopup = true;
+        lowBatteryPopupTime = millis();
+        
+        // Auto-enable battery saver
+        if (!batterySaverMode) {
+            batterySaverMode = true;
+            batterySaverAutoEnabled = true;
+        }
+    }
+    else if (batteryPercent <= LOW_BATTERY_WARNING && !lowBatteryWarningShown) {
+        lowBatteryWarningShown = true;
+        showingLowBatteryPopup = true;
+        lowBatteryPopupTime = millis();
+    }
+    
+    // Auto-dismiss popup after 5 seconds
+    if (showingLowBatteryPopup && millis() - lowBatteryPopupTime > 5000) {
+        showingLowBatteryPopup = false;
+        redrawNeeded = true;
+    }
+}
+
+void toggleBatterySaver() {
+    batterySaverMode = !batterySaverMode;
+    batterySaverAutoEnabled = false;
+    
+    if (batterySaverMode) {
+        gfx->setBrightness(100);  // Dim screen
+    } else {
+        gfx->setBrightness(200);  // Normal brightness
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  DATA PERSISTENCE
 // ═══════════════════════════════════════════════════════════════════════════
 
 void saveUserData() {
@@ -599,14 +659,33 @@ void saveUserData() {
     prefs.putUInt("steps", stepCount);
     prefs.putUInt("stepGoal", stepGoal);
     prefs.putUInt("clicker", clickerScore);
+    prefs.putBool("saver", batterySaverMode);
+    
+    // Save battery stats
+    prefs.putFloat("avgDrain", batteryStats.avgDrainPerHour);
+    prefs.putFloat("wDrain", batteryStats.weightedDrainRate);
+    
+    // Save daily data
     for (int i = 0; i < 7; i++) {
         char key[16];
+        snprintf(key, sizeof(key), "dOn%d", i);
+        prefs.putFloat(key, batteryStats.dailyAvgScreenOnHours[i]);
+        snprintf(key, sizeof(key), "dDr%d", i);
+        prefs.putFloat(key, batteryStats.dailyAvgDrainRate[i]);
         snprintf(key, sizeof(key), "hist%d", i);
         prefs.putUInt(key, stepHistory[i]);
     }
+    
+    // Save card usage
+    for (int i = 0; i < CARD_USAGE_SLOTS; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "card%d", i);
+        prefs.putUInt(key, batteryStats.cardUsageTime[i]);
+    }
+    
     prefs.end();
-    Serial.println("[OK] Data saved");
     lastSaveTime = millis();
+    Serial.println("[OK] Data saved");
 }
 
 void loadUserData() {
@@ -614,174 +693,96 @@ void loadUserData() {
     stepCount = prefs.getUInt("steps", 0);
     stepGoal = prefs.getUInt("stepGoal", 10000);
     clickerScore = prefs.getUInt("clicker", 0);
+    batterySaverMode = prefs.getBool("saver", false);
+    
+    batteryStats.avgDrainPerHour = prefs.getFloat("avgDrain", 5.0f);
+    batteryStats.weightedDrainRate = prefs.getFloat("wDrain", 5.0f);
+    
     for (int i = 0; i < 7; i++) {
         char key[16];
+        snprintf(key, sizeof(key), "dOn%d", i);
+        batteryStats.dailyAvgScreenOnHours[i] = prefs.getFloat(key, 0);
+        snprintf(key, sizeof(key), "dDr%d", i);
+        batteryStats.dailyAvgDrainRate[i] = prefs.getFloat(key, 0);
         snprintf(key, sizeof(key), "hist%d", i);
         stepHistory[i] = prefs.getUInt(key, 0);
     }
+    
+    for (int i = 0; i < CARD_USAGE_SLOTS; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "card%d", i);
+        batteryStats.cardUsageTime[i] = prefs.getUInt(key, 0);
+    }
+    
     prefs.end();
     Serial.println("[OK] Data loaded");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  FACTORY RESET (data only, preserves sketch & SD card)
-// ═══════════════════════════════════════════════════════════════════════════
-
 void factoryReset() {
-    Serial.println("[WARN] FACTORY RESET - Clearing all data...");
-    
-    // Clear preferences (NVS)
+    Serial.println("[WARN] FACTORY RESET");
     prefs.begin("minios", false);
     prefs.clear();
     prefs.end();
-    
-    // Reset all runtime variables
-    stepCount = 0;
-    stepGoal = 10000;
-    clickerScore = 0;
-    for (int i = 0; i < 7; i++) {
-        stepHistory[i] = 0;
-    }
-    
-    // Reset music state
-    musicPlaying = false;
-    musicCurrent = 0;
-    
-    // Reset games
-    spotlightGame = 0;
-    reactionTime = 0;
-    
-    Serial.println("[OK] Factory reset complete");
-    Serial.println("[INFO] SD card data preserved");
-    
-    // Restart to apply
-    delay(1000);
+    delay(500);
     ESP.restart();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  BATTERY TIME ESTIMATION
-// ═══════════════════════════════════════════════════════════════════════════
-
-void calculateBatteryEstimate() {
-    // Calculate remaining battery time based on current state
-    float remainingCapacity = (BATTERY_CAPACITY_MAH * batteryPercent) / 100.0f;
-    float currentDraw = screenOn ? SCREEN_ON_CURRENT_MA : SCREEN_OFF_CURRENT_MA;
-    
-    // Estimate in minutes
-    batteryEstimateMinutes = (uint32_t)((remainingCapacity / currentDraw) * 60.0f);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  POWER CONTROL (ON/OFF button handling)
+//  SCREEN CONTROL
 // ═══════════════════════════════════════════════════════════════════════════
 
 void screenOff() {
     if (!screenOn) return;
+    
+    // Track screen on time
+    batteryStats.screenOnTimeMs += (millis() - screenOnStartMs);
+    screenOffStartMs = millis();
+    
     screenOn = false;
-    screenOffTime = millis();
     gfx->setBrightness(0);
-    Serial.println("[INFO] Screen OFF");
 }
 
 void screenOnFunc() {
     if (screenOn) return;
+    
+    // Track screen off time
+    batteryStats.screenOffTimeMs += (millis() - screenOffStartMs);
+    screenOnStartMs = millis();
+    
     screenOn = true;
     lastActivityMs = millis();
-    gfx->setBrightness(200);
+    gfx->setBrightness(batterySaverMode ? 100 : 200);
     redrawNeeded = true;
-    Serial.println("[INFO] Screen ON");
 }
 
 void shutdownDevice() {
-    Serial.println("[INFO] Shutting down...");
-    
-    // Save data before shutdown
     saveUserData();
-    
-    // Display shutdown message
     gfx->fillScreen(COL_BG);
     gfx->setTextColor(COL_TEXT);
     gfx->setTextSize(2);
-    gfx->setCursor(100, LCD_HEIGHT/2 - 20);
+    gfx->setCursor(100, LCD_HEIGHT/2);
     gfx->print("Shutting down...");
     delay(1000);
-    
-    // Turn off display
     gfx->setBrightness(0);
-    
-    // Power off via PMU
-    if (hasPMU) {
-        pmu.powerOff();
-    }
-    
-    // If PMU doesn't work, use deep sleep
+    if (hasPMU) pmu.powerOff();
     esp_deep_sleep_start();
 }
 
-void handlePowerButton() {
-    // Check if touch is in top-right corner (power button area)
-    bool inPowerArea = (touchX > LCD_WIDTH - 60 && touchY < 60);
-    
-    if (inPowerArea && !buttonPressed) {
-        buttonPressed = true;
-        buttonPressStart = millis();
-    }
-    else if (!inPowerArea && buttonPressed) {
-        unsigned long pressDuration = millis() - buttonPressStart;
-        buttonPressed = false;
-        
-        if (pressDuration >= BUTTON_LONG_PRESS_MS) {
-            // Long press - shutdown
-            shutdownDevice();
-        } else if (pressDuration > 50) {
-            // Short press - toggle screen
-            if (screenOn) {
-                screenOff();
-            } else {
-                screenOnFunc();
-            }
-        }
-    }
-    
-    // Visual feedback for long press
-    if (buttonPressed && screenOn) {
-        unsigned long elapsed = millis() - buttonPressStart;
-        if (elapsed > 500) {
-            // Show progress indicator
-            int progress = min((int)((elapsed - 500) * 100 / (BUTTON_LONG_PRESS_MS - 500)), 100);
-            gfx->fillRect(LCD_WIDTH - 50, 10, 40, 5, COL_CARD);
-            gfx->fillRect(LCD_WIDTH - 50, 10, (40 * progress) / 100, 5, COL_DANGER);
-        }
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
-//  UI WIDGET FUNCTIONS
+//  UI DRAWING HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
 void drawGradientCard(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c1, uint16_t c2) {
     for (int16_t i = 0; i < h; i++) {
-        uint8_t r1 = (c1 >> 11) & 0x1F;
-        uint8_t g1 = (c1 >> 5) & 0x3F;
-        uint8_t b1 = c1 & 0x1F;
-        
-        uint8_t r2 = (c2 >> 11) & 0x1F;
-        uint8_t g2 = (c2 >> 5) & 0x3F;
-        uint8_t b2 = c2 & 0x1F;
-        
         float t = (float)i / h;
-        uint8_t r = r1 + (r2 - r1) * t;
-        uint8_t g = g1 + (g2 - g1) * t;
-        uint8_t b = b1 + (b2 - b1) * t;
-        
-        uint16_t col = ((r & 0x1F) << 11) | ((g & 0x3F) << 5) | (b & 0x1F);
-        gfx->drawFastHLine(x, y + i, w, col);
+        uint8_t r = ((c1 >> 11) & 0x1F) + (((c2 >> 11) & 0x1F) - ((c1 >> 11) & 0x1F)) * t;
+        uint8_t g = ((c1 >> 5) & 0x3F) + (((c2 >> 5) & 0x3F) - ((c1 >> 5) & 0x3F)) * t;
+        uint8_t b = (c1 & 0x1F) + ((c2 & 0x1F) - (c1 & 0x1F)) * t;
+        gfx->drawFastHLine(x, y + i, w, ((r & 0x1F) << 11) | ((g & 0x3F) << 5) | (b & 0x1F));
     }
-    gfx->drawRoundRect(x, y, w, h, CARD_RADIUS, c1);
 }
 
-void drawCard(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color = COL_CARD) {
+void drawCard(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
     gfx->fillRoundRect(x, y, w, h, CARD_RADIUS, color);
 }
 
@@ -789,40 +790,132 @@ void drawButton(int16_t x, int16_t y, int16_t w, int16_t h, const char* label, u
     gfx->fillRoundRect(x, y, w, h, BTN_RADIUS, color);
     gfx->setTextColor(COL_TEXT);
     gfx->setTextSize(2);
-    int16_t tw = strlen(label) * 12;
-    gfx->setCursor(x + (w - tw) / 2, y + (h - 16) / 2);
+    gfx->setCursor(x + (w - strlen(label) * 12) / 2, y + (h - 16) / 2);
     gfx->print(label);
 }
 
 void drawProgressBar(int16_t x, int16_t y, int16_t w, int16_t h, float progress, uint16_t fg, uint16_t bg) {
     gfx->fillRoundRect(x, y, w, h, h/2, bg);
     int16_t fw = (int16_t)(w * progress);
-    if (fw > 0) {
-        gfx->fillRoundRect(x, y, fw, h, h/2, fg);
+    if (fw > 0) gfx->fillRoundRect(x, y, fw, h, h/2, fg);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  MINI STATUS BAR (shown on all cards)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void drawStatusBar() {
+    // Background bar
+    gfx->fillRect(0, 0, LCD_WIDTH, 35, COL_BG);
+    
+    // WiFi indicator
+    gfx->setTextSize(1);
+    gfx->setTextColor(wifiConnected ? COL_SUCCESS : COL_TEXT_DIMMER);
+    gfx->setCursor(MARGIN, 10);
+    gfx->print("W");
+    
+    // Battery saver indicator
+    if (batterySaverMode) {
+        gfx->setTextColor(COL_WARNING);
+        gfx->setCursor(MARGIN + 15, 10);
+        gfx->print("S");
+    }
+    
+    // Mini battery estimate (center)
+    gfx->setTextColor(COL_TEXT_DIM);
+    gfx->setCursor(LCD_WIDTH/2 - 30, 10);
+    
+    if (isCharging) {
+        gfx->setTextColor(COL_CHARGING);
+        gfx->print("Charging");
+    } else {
+        uint32_t hrs = batteryStats.combinedEstimateMins / 60;
+        uint32_t mins = batteryStats.combinedEstimateMins % 60;
+        if (hrs > 0) {
+            gfx->printf("~%luh %lum", hrs, mins);
+        } else {
+            gfx->printf("~%lum", mins);
+        }
+    }
+    
+    // Battery percentage with color
+    gfx->setTextColor(batteryPercent > 20 ? COL_SUCCESS : COL_DANGER);
+    gfx->setCursor(LCD_WIDTH - 45, 10);
+    gfx->printf("%d%%", batteryPercent);
+    
+    // Charging animation or battery icon
+    drawBatteryIconMini(LCD_WIDTH - 25, 8);
+}
+
+void drawBatteryIconMini(int16_t x, int16_t y) {
+    uint16_t col = batteryPercent > 20 ? COL_SUCCESS : COL_DANGER;
+    
+    if (isCharging) {
+        // Animated charging icon
+        col = COL_CHARGING;
+        int fill = (chargingAnimFrame * 18) / 4;
+        gfx->drawRect(x, y + 2, 18, 8, col);
+        gfx->fillRect(x + 18, y + 4, 2, 4, col);
+        gfx->fillRect(x + 1, y + 3, fill, 6, col);
+    } else {
+        gfx->drawRect(x, y + 2, 18, 8, COL_TEXT_DIM);
+        gfx->fillRect(x + 18, y + 4, 2, 4, COL_TEXT_DIM);
+        int fillW = (16 * batteryPercent) / 100;
+        gfx->fillRect(x + 1, y + 3, fillW, 6, col);
     }
 }
 
-void drawBatteryIcon(int16_t x, int16_t y, uint8_t percent, bool charging) {
-    uint16_t col = percent > 20 ? COL_SUCCESS : COL_DANGER;
-    if (charging) col = COL_CLOCK;
+// ═══════════════════════════════════════════════════════════════════════════
+//  LOW BATTERY POPUP
+// ═══════════════════════════════════════════════════════════════════════════
+
+void drawLowBatteryPopup() {
+    if (!showingLowBatteryPopup) return;
     
-    gfx->drawRect(x, y + 2, 20, 10, COL_TEXT_DIM);
-    gfx->fillRect(x + 20, y + 4, 2, 6, COL_TEXT_DIM);
-    int16_t fillW = (18 * percent) / 100;
-    gfx->fillRect(x + 1, y + 3, fillW, 8, col);
+    // Darken background
+    gfx->fillRect(30, 100, LCD_WIDTH - 60, 200, COL_BG);
+    gfx->drawRoundRect(30, 100, LCD_WIDTH - 60, 200, 16, COL_DANGER);
     
-    if (charging) {
-        gfx->setTextSize(1);
-        gfx->setCursor(x + 5, y + 3);
-        gfx->setTextColor(COL_BG);
-        gfx->print("*");
+    gfx->setTextColor(COL_DANGER);
+    gfx->setTextSize(2);
+    gfx->setCursor(80, 130);
+    
+    if (batteryPercent <= CRITICAL_BATTERY_WARNING) {
+        gfx->print("CRITICAL!");
+    } else {
+        gfx->print("Low Battery");
     }
+    
+    gfx->setTextSize(5);
+    gfx->setCursor(LCD_WIDTH/2 - 50, 170);
+    gfx->printf("%d%%", batteryPercent);
+    
+    gfx->setTextSize(1);
+    gfx->setTextColor(COL_TEXT_DIM);
+    gfx->setCursor(60, 240);
+    
+    if (batterySaverAutoEnabled) {
+        gfx->print("Battery Saver enabled");
+    } else {
+        gfx->print("Enable Battery Saver?");
+    }
+    
+    gfx->setCursor(100, 270);
+    gfx->print("Tap to dismiss");
 }
 
-void drawPowerButton(int16_t x, int16_t y) {
-    // Power button indicator in top-right
-    gfx->drawCircle(x, y, 12, COL_TEXT_DIMMER);
-    gfx->drawLine(x, y - 8, x, y - 3, COL_TEXT_DIMMER);
+// ═══════════════════════════════════════════════════════════════════════════
+//  CHARGING ANIMATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+void updateChargingAnimation() {
+    if (!isCharging) return;
+    
+    if (millis() - lastChargingAnimMs > 500) {
+        chargingAnimFrame = (chargingAnimFrame + 1) % 5;
+        lastChargingAnimMs = millis();
+        if (screenOn) redrawNeeded = true;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -831,390 +924,464 @@ void drawPowerButton(int16_t x, int16_t y) {
 
 void drawMainClock() {
     gfx->fillScreen(COL_BG);
+    drawStatusBar();
     
-    // Top bar
-    gfx->setTextColor(COL_TEXT_DIMMER);
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN, 10);
-    gfx->print("CLOCK");
+    drawGradientCard(MARGIN, 45, LCD_WIDTH - 2*MARGIN, 270, 0x4A5F, 0x001F);
     
-    // Power button hint
-    drawPowerButton(LCD_WIDTH - 25, 25);
-    
-    // Battery indicator
-    bool charging = hasPMU ? pmu.isCharging() : false;
-    drawBatteryIcon(LCD_WIDTH - 60, 8, batteryPercent, charging);
-    
-    // WiFi indicator
-    gfx->setTextColor(wifiConnected ? COL_SUCCESS : COL_TEXT_DIMMER);
-    gfx->setCursor(LCD_WIDTH - 85, 10);
-    gfx->print("W");
-    
-    // Main gradient card
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, 0x4A5F, 0x001F);
-    
-    // App icon/branding
     gfx->setTextSize(2);
     gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 20, 80);
-    gfx->print("S3 MiniOS v3");
+    gfx->setCursor(MARGIN + 20, 65);
+    gfx->print("S3 MiniOS v3.1");
     
-    // Day
     gfx->setTextSize(2);
     gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 20, 120);
+    gfx->setCursor(MARGIN + 20, 105);
     gfx->print(daysOfWeek[currentDay]);
     
-    // Time - large display
     gfx->setTextSize(7);
     gfx->setTextColor(COL_TEXT);
     char timeStr[10];
     sprintf(timeStr, "%02d:%02d", clockHour, clockMinute);
-    gfx->setCursor(MARGIN + 20, 155);
+    gfx->setCursor(MARGIN + 20, 140);
     gfx->print(timeStr);
     
-    // Seconds
     gfx->setTextSize(4);
     gfx->setTextColor(COL_CLOCK);
-    gfx->setCursor(MARGIN + 260, 180);
+    gfx->setCursor(MARGIN + 260, 165);
     gfx->printf("%02d", clockSecond);
     
-    // Location from WiFi
     gfx->setTextSize(1);
     gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 15, 270);
+    gfx->setCursor(MARGIN + 15, 255);
     gfx->print(weatherLocation);
     
-    // Navigation hints
-    gfx->setTextSize(1);
     gfx->setTextColor(COL_TEXT_DIMMER);
     gfx->setCursor(LCD_WIDTH/2 - 50, LCD_HEIGHT - 25);
-    gfx->print("Swipe down for more");
-}
-
-void drawMainWeather() {
-    gfx->fillScreen(COL_BG);
+    gfx->print("Swipe to navigate");
     
-    gfx->setTextColor(COL_TEXT_DIMMER);
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN, 10);
-    gfx->print("WEATHER");
-    
-    drawPowerButton(LCD_WIDTH - 25, 25);
-    bool charging = hasPMU ? pmu.isCharging() : false;
-    drawBatteryIcon(LCD_WIDTH - 60, 8, batteryPercent, charging);
-    
-    // Weather card
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, 0x07E0, 0x001F);
-    
-    // Location (from WiFi/IP)
-    gfx->setTextSize(2);
-    gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 20, 80);
-    gfx->print(weatherLocation);
-    
-    // Large temperature
-    gfx->setTextSize(8);
-    gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 40, 130);
-    gfx->printf("%d", weatherTemp);
-    
-    gfx->setTextSize(4);
-    gfx->setCursor(MARGIN + 145, 135);
-    gfx->print("o");
-    
-    // Condition
-    gfx->setTextSize(2);
-    gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 20, 225);
-    gfx->print(weatherCondition);
-    
-    // Additional info
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN + 20, 265);
-    gfx->printf("Humidity: %d%%  Wind: %d km/h", weatherHumidity, weatherWind);
-    
-    // WiFi status
-    if (wifiConfigFromSD) {
-        gfx->setTextColor(COL_SUCCESS);
-        gfx->setCursor(MARGIN + 20, 285);
-        gfx->print("WiFi from SD card");
-    }
-    
-    gfx->setTextSize(1);
-    gfx->setTextColor(COL_TEXT_DIMMER);
-    gfx->setCursor(LCD_WIDTH/2 - 50, LCD_HEIGHT - 25);
-    gfx->print("Swipe down for forecast");
+    if (showingLowBatteryPopup) drawLowBatteryPopup();
 }
 
 void drawMainSteps() {
     gfx->fillScreen(COL_BG);
+    drawStatusBar();
     
-    gfx->setTextColor(COL_TEXT_DIMMER);
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN, 10);
-    gfx->print("STEPS");
-    
-    drawPowerButton(LCD_WIDTH - 25, 25);
-    bool charging = hasPMU ? pmu.isCharging() : false;
-    drawBatteryIcon(LCD_WIDTH - 60, 8, batteryPercent, charging);
-    
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, 0x5A5F, 0x4011);
+    drawGradientCard(MARGIN, 45, LCD_WIDTH - 2*MARGIN, 270, 0x5A5F, 0x4011);
     
     gfx->setTextSize(2);
     gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 20, 80);
+    gfx->setCursor(MARGIN + 20, 65);
     gfx->print("Daily Steps");
     
-    gfx->setTextSize(2);
-    gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 20, 120);
-    gfx->print("Steps:");
-    
     gfx->setTextSize(7);
-    gfx->setTextColor(COL_TEXT);
-    char stepsStr[10];
-    sprintf(stepsStr, "%lu", stepCount);
-    gfx->setCursor(MARGIN + 20, 155);
-    gfx->print(stepsStr);
+    gfx->setCursor(MARGIN + 20, 120);
+    gfx->printf("%lu", stepCount);
     
-    char goalStr[20];
-    sprintf(goalStr, "/ %lu", stepGoal);
     gfx->setTextSize(2);
     gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 220, 195);
-    gfx->print(goalStr);
+    gfx->setCursor(MARGIN + 200, 165);
+    gfx->printf("/ %lu", stepGoal);
     
-    float stepProgress = (float)stepCount / (float)stepGoal;
-    if (stepProgress > 1.0f) stepProgress = 1.0f;
-    drawProgressBar(MARGIN + 15, 270, LCD_WIDTH - 2*MARGIN - 30, 12, stepProgress, COL_STEPS, COL_CARD_LIGHT);
+    float progress = (float)stepCount / (float)stepGoal;
+    if (progress > 1.0f) progress = 1.0f;
+    drawProgressBar(MARGIN + 15, 230, LCD_WIDTH - 2*MARGIN - 30, 14, progress, COL_STEPS, COL_CARD_LIGHT);
     
+    // Step correlation with battery
     gfx->setTextSize(1);
+    gfx->setTextColor(COL_TEXT_DIM);
+    gfx->setCursor(MARGIN + 15, 260);
+    gfx->printf("Today's activity: %lu steps", stepCount);
+    
     gfx->setTextColor(COL_TEXT_DIMMER);
     gfx->setCursor(LCD_WIDTH/2 - 50, LCD_HEIGHT - 25);
-    gfx->print("Swipe down for more");
+    gfx->print("Swipe down for graph");
+    
+    if (showingLowBatteryPopup) drawLowBatteryPopup();
 }
 
 void drawMainMusic() {
     gfx->fillScreen(COL_BG);
+    drawStatusBar();
     
-    gfx->setTextColor(COL_TEXT_DIMMER);
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN, 10);
-    gfx->print("MUSIC");
+    drawGradientCard(MARGIN, 45, LCD_WIDTH - 2*MARGIN, 310, 0xF81F, 0x001F);
     
-    drawPowerButton(LCD_WIDTH - 25, 25);
-    bool charging = hasPMU ? pmu.isCharging() : false;
-    drawBatteryIcon(LCD_WIDTH - 60, 8, batteryPercent, charging);
-    
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 300, 0xF81F, 0x001F);
-    
-    gfx->fillRoundRect(MARGIN + 20, 90, 120, 120, 12, COL_CARD_LIGHT);
+    gfx->fillRoundRect(MARGIN + 20, 75, 120, 120, 12, COL_CARD_LIGHT);
     gfx->setTextColor(COL_TEXT_DIM);
     gfx->setTextSize(1);
-    gfx->setCursor(MARGIN + 45, 145);
-    gfx->print("Album Art");
+    gfx->setCursor(MARGIN + 50, 130);
+    gfx->print("Album");
     
     gfx->setTextColor(COL_TEXT);
     gfx->setTextSize(2);
-    gfx->setCursor(MARGIN + 160, 110);
+    gfx->setCursor(MARGIN + 160, 95);
     gfx->print(musicTitle);
     
     gfx->setTextColor(COL_TEXT_DIM);
     gfx->setTextSize(1);
-    gfx->setCursor(MARGIN + 160, 140);
+    gfx->setCursor(MARGIN + 160, 125);
     gfx->print(musicArtist);
     
-    int16_t controlY = 250;
-    int16_t controlCX = LCD_WIDTH / 2;
+    int16_t ctrlY = 240;
+    int16_t ctrlCX = LCD_WIDTH / 2;
     
-    gfx->fillCircle(controlCX - 60, controlY, 18, COL_CARD_LIGHT);
+    gfx->fillCircle(ctrlCX - 60, ctrlY, 18, COL_CARD_LIGHT);
+    gfx->fillCircle(ctrlCX, ctrlY, 25, COL_TEXT);
+    gfx->fillCircle(ctrlCX + 60, ctrlY, 18, COL_CARD_LIGHT);
+    
     gfx->setTextColor(COL_TEXT);
     gfx->setTextSize(2);
-    gfx->setCursor(controlCX - 69, controlY - 8);
+    gfx->setCursor(ctrlCX - 69, ctrlY - 8);
     gfx->print("|<");
-    
-    gfx->fillCircle(controlCX, controlY, 25, COL_TEXT);
-    gfx->setTextColor(COL_BG);
-    gfx->setTextSize(3);
-    gfx->setCursor(controlCX - 6, controlY - 12);
-    gfx->print(musicPlaying ? "||" : ">");
-    
-    gfx->fillCircle(controlCX + 60, controlY, 18, COL_CARD_LIGHT);
-    gfx->setTextColor(COL_TEXT);
-    gfx->setTextSize(2);
-    gfx->setCursor(controlCX + 51, controlY - 8);
+    gfx->setCursor(ctrlCX + 51, ctrlY - 8);
     gfx->print(">|");
     
-    drawProgressBar(MARGIN + 20, 320, LCD_WIDTH - 2*MARGIN - 40, 8, (float)musicCurrent / musicDuration, COL_MUSIC, COL_CARD_LIGHT);
+    gfx->setTextColor(COL_BG);
+    gfx->setTextSize(3);
+    gfx->setCursor(ctrlCX - 6, ctrlY - 12);
+    gfx->print(musicPlaying ? "||" : ">");
+    
+    drawProgressBar(MARGIN + 20, 310, LCD_WIDTH - 2*MARGIN - 40, 8, 
+        (float)musicCurrent / musicDuration, COL_MUSIC, COL_CARD_LIGHT);
+    
+    if (showingLowBatteryPopup) drawLowBatteryPopup();
 }
 
 void drawMainGames() {
     gfx->fillScreen(COL_BG);
+    drawStatusBar();
     
-    gfx->setTextColor(COL_TEXT_DIMMER);
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN, 10);
-    gfx->print("GAMES");
-    
-    drawPowerButton(LCD_WIDTH - 25, 25);
-    bool charging = hasPMU ? pmu.isCharging() : false;
-    drawBatteryIcon(LCD_WIDTH - 60, 8, batteryPercent, charging);
-    
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 260, 0xFD20, 0xF800);
+    drawGradientCard(MARGIN, 45, LCD_WIDTH - 2*MARGIN, 270, 0xFD20, 0xF800);
     
     gfx->setTextSize(3);
     gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 20, 90);
+    gfx->setCursor(MARGIN + 20, 75);
     gfx->print("GAMES HUB");
     
-    const char* gameName;
-    const char* gameDesc;
-    
-    switch(spotlightGame) {
-        case 0: gameName = "Yes or No"; gameDesc = "Quick decision maker"; break;
-        case 1: gameName = "Clicker"; gameDesc = "Tap as fast as you can"; break;
-        case 2: gameName = "Reaction Test"; gameDesc = "Test your reflexes"; break;
-        default: gameName = "Mystery Game"; gameDesc = "Coming soon..."; break;
-    }
-    
-    gfx->setTextSize(1);
-    gfx->setTextColor(COL_TEXT_DIMMER);
+    const char* games[] = {"Yes or No", "Clicker", "Reaction"};
+    gfx->setTextSize(2);
     gfx->setCursor(MARGIN + 20, 140);
-    gfx->print("FEATURED GAME");
-    
-    gfx->setTextSize(3);
-    gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 20, 165);
-    gfx->print(gameName);
+    gfx->print(games[spotlightGame]);
     
     gfx->setTextSize(1);
     gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 20, 205);
-    gfx->print(gameDesc);
-    
-    // Clicker score
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN + 20, 240);
+    gfx->setCursor(MARGIN + 20, 180);
     gfx->printf("Clicker Score: %lu", clickerScore);
     
-    gfx->setTextSize(1);
+    // Most used card indicator
+    uint32_t maxUsage = 0;
+    int mostUsed = 0;
+    for (int i = 0; i < CARD_USAGE_SLOTS; i++) {
+        if (batteryStats.cardUsageTime[i] > maxUsage) {
+            maxUsage = batteryStats.cardUsageTime[i];
+            mostUsed = i;
+        }
+    }
+    
+    const char* cardNames[] = {"Clock", "Steps", "Music", "Games", "Weather", "System"};
+    gfx->setCursor(MARGIN + 20, 210);
+    gfx->printf("Most used: %s", cardNames[mostUsed]);
+    
     gfx->setTextColor(COL_TEXT_DIMMER);
     gfx->setCursor(LCD_WIDTH/2 - 50, LCD_HEIGHT - 25);
     gfx->print("Swipe down to play");
+    
+    if (showingLowBatteryPopup) drawLowBatteryPopup();
+}
+
+void drawMainWeather() {
+    gfx->fillScreen(COL_BG);
+    drawStatusBar();
+    
+    drawGradientCard(MARGIN, 45, LCD_WIDTH - 2*MARGIN, 270, 0x07E0, 0x001F);
+    
+    gfx->setTextSize(2);
+    gfx->setTextColor(COL_TEXT);
+    gfx->setCursor(MARGIN + 20, 65);
+    gfx->print(weatherLocation);
+    
+    gfx->setTextSize(8);
+    gfx->setCursor(MARGIN + 40, 110);
+    gfx->printf("%d", weatherTemp);
+    gfx->setTextSize(4);
+    gfx->setCursor(MARGIN + 150, 115);
+    gfx->print("C");
+    
+    gfx->setTextSize(2);
+    gfx->setTextColor(COL_TEXT_DIM);
+    gfx->setCursor(MARGIN + 20, 210);
+    gfx->print(weatherCondition);
+    
+    gfx->setTextSize(1);
+    gfx->setCursor(MARGIN + 20, 250);
+    gfx->printf("Humidity: %d%%  Wind: %d km/h", weatherHumidity, weatherWind);
+    
+    if (wifiConfigFromSD) {
+        gfx->setTextColor(COL_SUCCESS);
+        gfx->setCursor(MARGIN + 20, 270);
+        gfx->print("WiFi from SD");
+    }
+    
+    gfx->setTextColor(COL_TEXT_DIMMER);
+    gfx->setCursor(LCD_WIDTH/2 - 50, LCD_HEIGHT - 25);
+    gfx->print("Swipe down for more");
+    
+    if (showingLowBatteryPopup) drawLowBatteryPopup();
 }
 
 void drawMainSystem() {
     gfx->fillScreen(COL_BG);
+    drawStatusBar();
     
-    gfx->setTextColor(COL_TEXT_DIMMER);
-    gfx->setTextSize(1);
-    gfx->setCursor(MARGIN, 10);
-    gfx->print("SYSTEM");
-    
-    drawPowerButton(LCD_WIDTH - 25, 25);
-    bool charging = hasPMU ? pmu.isCharging() : false;
-    drawBatteryIcon(LCD_WIDTH - 60, 8, batteryPercent, charging);
-    
-    drawGradientCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 320, 0xFFE0, 0x4208);
+    drawGradientCard(MARGIN, 45, LCD_WIDTH - 2*MARGIN, 330, 0xFFE0, 0x4208);
     
     gfx->setTextSize(2);
     gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 20, 85);
+    gfx->setCursor(MARGIN + 20, 65);
     gfx->print("BATTERY STATUS");
     
-    // Battery percentage
+    // Large battery percentage
     gfx->setTextSize(5);
     gfx->setTextColor(batteryPercent > 20 ? COL_SUCCESS : COL_DANGER);
-    gfx->setCursor(MARGIN + 40, 120);
+    gfx->setCursor(MARGIN + 40, 100);
     gfx->printf("%d%%", batteryPercent);
     
-    // Charging status
+    // Charging status with animation
     gfx->setTextSize(2);
-    gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 20, 185);
-    gfx->print(charging ? "Charging..." : "On Battery");
-    
-    // Battery time estimate
-    calculateBatteryEstimate();
-    gfx->setTextSize(1);
-    gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 20, 220);
-    
-    if (batteryEstimateMinutes > 0) {
-        uint32_t hours = batteryEstimateMinutes / 60;
-        uint32_t mins = batteryEstimateMinutes % 60;
-        gfx->printf("Est. Time: %luh %lum", hours, mins);
-        
-        gfx->setTextSize(1);
-        gfx->setTextColor(COL_TEXT_DIMMER);
-        gfx->setCursor(MARGIN + 20, 240);
-        gfx->print(screenOn ? "(screen on)" : "(screen off)");
+    if (isCharging) {
+        gfx->setTextColor(COL_CHARGING);
+        gfx->setCursor(MARGIN + 20, 165);
+        const char* dots[] = {"Charging", "Charging.", "Charging..", "Charging..."};
+        gfx->print(dots[chargingAnimFrame % 4]);
+    } else {
+        gfx->setTextColor(COL_TEXT_DIM);
+        gfx->setCursor(MARGIN + 20, 165);
+        gfx->print("On Battery");
     }
     
-    // Voltage
+    // Combined battery estimate
+    calculateBatteryEstimates();
     gfx->setTextSize(1);
+    gfx->setTextColor(COL_TEXT);
+    gfx->setCursor(MARGIN + 20, 200);
+    
+    uint32_t hrs = batteryStats.combinedEstimateMins / 60;
+    uint32_t mins = batteryStats.combinedEstimateMins % 60;
+    gfx->printf("Estimated: %luh %lum remaining", hrs, mins);
+    
+    // Battery saver toggle
+    gfx->setCursor(MARGIN + 20, 225);
+    gfx->setTextColor(batterySaverMode ? COL_WARNING : COL_TEXT_DIM);
+    gfx->printf("Battery Saver: %s", batterySaverMode ? "ON" : "OFF");
+    
+    // Voltage
     gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 20, 265);
+    gfx->setCursor(MARGIN + 20, 250);
     gfx->printf("Voltage: %dmV", batteryVoltage);
     
     // System info
-    gfx->setCursor(MARGIN + 20, 285);
+    gfx->setCursor(MARGIN + 20, 270);
     gfx->printf("Free RAM: %lu KB", freeRAM / 1024);
     
-    // WiFi status
-    gfx->setCursor(MARGIN + 20, 305);
-    gfx->printf("WiFi: %s", wifiConnected ? "Connected" : "Disconnected");
-    if (wifiConfigFromSD) {
-        gfx->print(" (SD)");
-    }
+    gfx->setCursor(MARGIN + 20, 290);
+    gfx->printf("WiFi: %s%s", wifiConnected ? "Connected" : "Off", wifiConfigFromSD ? " (SD)" : "");
     
-    // SD card status
-    gfx->setCursor(MARGIN + 20, 325);
-    gfx->printf("SD Card: %s", hasSD ? "OK" : "Not found");
+    gfx->setCursor(MARGIN + 20, 310);
+    gfx->printf("SD Card: %s", hasSD ? "OK" : "None");
     
-    // Save interval info
+    // Tap hint for battery saver
     gfx->setTextColor(COL_TEXT_DIMMER);
-    gfx->setCursor(MARGIN + 20, 350);
-    gfx->print("Auto-save: every 2 hours");
+    gfx->setCursor(MARGIN + 20, 340);
+    gfx->print("Tap 'Saver' to toggle | Swipe for stats");
     
-    gfx->setTextSize(1);
-    gfx->setTextColor(COL_TEXT_DIMMER);
     gfx->setCursor(LCD_WIDTH/2 - 60, LCD_HEIGHT - 25);
-    gfx->print("Swipe down for reset");
+    gfx->print("Swipe down for details");
+    
+    if (showingLowBatteryPopup) drawLowBatteryPopup();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SUB-CARD SCREENS
 // ═══════════════════════════════════════════════════════════════════════════
 
+void drawSubBatteryStats() {
+    gfx->fillScreen(COL_BG);
+    
+    gfx->setTextColor(COL_TEXT);
+    gfx->setTextSize(2);
+    gfx->setCursor(MARGIN, 15);
+    gfx->print("< Battery Stats");
+    
+    drawCard(MARGIN, 50, LCD_WIDTH - 2*MARGIN, 180, COL_CARD);
+    
+    // Usage graph (24 hour screen time)
+    gfx->setTextSize(1);
+    gfx->setTextColor(COL_TEXT_DIM);
+    gfx->setCursor(MARGIN + 15, 60);
+    gfx->print("Screen Time (24h)");
+    
+    // Draw bar graph
+    int16_t graphX = MARGIN + 15;
+    int16_t graphY = 80;
+    int16_t graphW = LCD_WIDTH - 2*MARGIN - 30;
+    int16_t graphH = 60;
+    int16_t barW = graphW / USAGE_HISTORY_SIZE;
+    
+    // Find max for scaling
+    uint16_t maxMins = 1;
+    for (int i = 0; i < USAGE_HISTORY_SIZE; i++) {
+        if (batteryStats.hourlyScreenOnMins[i] > maxMins)
+            maxMins = batteryStats.hourlyScreenOnMins[i];
+    }
+    
+    for (int i = 0; i < USAGE_HISTORY_SIZE; i++) {
+        int16_t barH = (batteryStats.hourlyScreenOnMins[i] * graphH) / maxMins;
+        if (barH < 2) barH = 2;
+        uint16_t col = (i == batteryStats.currentHourIndex) ? COL_CLOCK : COL_CARD_LIGHT;
+        gfx->fillRect(graphX + i * barW, graphY + graphH - barH, barW - 1, barH, col);
+    }
+    
+    // Estimate breakdown
+    gfx->setCursor(MARGIN + 15, 155);
+    gfx->setTextColor(COL_TEXT);
+    gfx->print("Estimates:");
+    
+    gfx->setTextColor(COL_TEXT_DIM);
+    gfx->setCursor(MARGIN + 15, 175);
+    gfx->printf("Simple: %lum", batteryStats.simpleEstimateMins);
+    gfx->setCursor(MARGIN + 120, 175);
+    gfx->printf("Weighted: %lum", batteryStats.weightedEstimateMins);
+    
+    gfx->setCursor(MARGIN + 15, 195);
+    gfx->printf("Learned: %lum", batteryStats.learnedEstimateMins);
+    gfx->setCursor(MARGIN + 120, 195);
+    gfx->setTextColor(COL_SUCCESS);
+    gfx->printf("Combined: %lum", batteryStats.combinedEstimateMins);
+    
+    // Card usage breakdown
+    drawCard(MARGIN, 240, LCD_WIDTH - 2*MARGIN, 120, COL_CARD);
+    
+    gfx->setTextSize(1);
+    gfx->setTextColor(COL_TEXT_DIM);
+    gfx->setCursor(MARGIN + 15, 250);
+    gfx->print("Card Usage (time spent)");
+    
+    const char* cardNames[] = {"Clock", "Steps", "Music", "Games", "Weather", "System"};
+    uint16_t cardColors[] = {COL_CLOCK, COL_STEPS, COL_MUSIC, COL_GAMES, COL_WEATHER, COL_SYSTEM};
+    
+    // Find total for percentages
+    uint32_t totalUsage = 0;
+    for (int i = 0; i < CARD_USAGE_SLOTS; i++) {
+        totalUsage += batteryStats.cardUsageTime[i];
+    }
+    if (totalUsage == 0) totalUsage = 1;
+    
+    for (int i = 0; i < CARD_USAGE_SLOTS; i++) {
+        int16_t barY = 270 + i * 14;
+        int pct = (batteryStats.cardUsageTime[i] * 100) / totalUsage;
+        
+        gfx->setTextColor(COL_TEXT_DIM);
+        gfx->setCursor(MARGIN + 15, barY);
+        gfx->printf("%s:", cardNames[i]);
+        
+        int16_t barLen = (pct * 150) / 100;
+        gfx->fillRect(MARGIN + 80, barY, barLen, 10, cardColors[i]);
+        
+        gfx->setCursor(MARGIN + 240, barY);
+        gfx->printf("%d%%", pct);
+    }
+    
+    gfx->setTextColor(COL_TEXT_DIMMER);
+    gfx->setCursor(LCD_WIDTH/2 - 35, LCD_HEIGHT - 25);
+    gfx->print("Swipe up to exit");
+}
+
+void drawSubUsagePatterns() {
+    gfx->fillScreen(COL_BG);
+    
+    gfx->setTextColor(COL_TEXT);
+    gfx->setTextSize(2);
+    gfx->setCursor(MARGIN, 15);
+    gfx->print("< Usage Patterns");
+    
+    drawCard(MARGIN, 50, LCD_WIDTH - 2*MARGIN, 150, COL_CARD);
+    
+    // Weekly screen time
+    gfx->setTextSize(1);
+    gfx->setTextColor(COL_TEXT_DIM);
+    gfx->setCursor(MARGIN + 15, 60);
+    gfx->print("Weekly Screen Time (hours)");
+    
+    const char* days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    
+    int16_t barY = 80;
+    for (int i = 0; i < 7; i++) {
+        gfx->setCursor(MARGIN + 15, barY + i * 17);
+        gfx->setTextColor(COL_TEXT_DIM);
+        gfx->print(days[i]);
+        
+        float hours = batteryStats.dailyAvgScreenOnHours[i];
+        int16_t barLen = (int16_t)(hours * 20);  // 20px per hour
+        if (barLen > 200) barLen = 200;
+        
+        uint16_t col = (i == batteryStats.currentDayIndex) ? COL_SUCCESS : COL_CARD_LIGHT;
+        gfx->fillRect(MARGIN + 50, barY + i * 17, barLen, 12, col);
+        
+        gfx->setCursor(MARGIN + 260, barY + i * 17);
+        gfx->printf("%.1fh", hours);
+    }
+    
+    // Drain rates
+    drawCard(MARGIN, 210, LCD_WIDTH - 2*MARGIN, 100, COL_CARD);
+    
+    gfx->setCursor(MARGIN + 15, 220);
+    gfx->setTextColor(COL_TEXT_DIM);
+    gfx->print("Battery Drain Analysis");
+    
+    gfx->setCursor(MARGIN + 15, 245);
+    gfx->printf("Avg drain/hour: %.1f%%", batteryStats.avgDrainPerHour);
+    
+    gfx->setCursor(MARGIN + 15, 265);
+    gfx->printf("Recent drain rate: %.1f%%", batteryStats.weightedDrainRate);
+    
+    gfx->setCursor(MARGIN + 15, 285);
+    if (batteryStats.avgDrainPerHour > 0) {
+        float dailyDrain = batteryStats.avgDrainPerHour * 24;
+        gfx->printf("Est. full battery: %.0f hours", 100.0f / batteryStats.avgDrainPerHour);
+    }
+    
+    gfx->setTextColor(COL_TEXT_DIMMER);
+    gfx->setCursor(LCD_WIDTH/2 - 35, LCD_HEIGHT - 25);
+    gfx->print("Swipe up to exit");
+}
+
 void drawSubSystemReset() {
     gfx->fillScreen(COL_BG);
     
     gfx->setTextColor(COL_TEXT);
     gfx->setTextSize(2);
-    gfx->setCursor(MARGIN, 20);
+    gfx->setCursor(MARGIN, 15);
     gfx->print("< Factory Reset");
     
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 150, COL_CARD);
+    drawCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 160, COL_CARD);
     
     gfx->setTextSize(1);
     gfx->setTextColor(COL_WARNING);
-    gfx->setCursor(MARGIN + 20, 100);
-    gfx->print("WARNING: This will clear all data");
+    gfx->setCursor(MARGIN + 20, 80);
+    gfx->print("WARNING: This will clear:");
     
     gfx->setTextColor(COL_TEXT_DIM);
+    gfx->setCursor(MARGIN + 20, 105);
+    gfx->print("- Steps, games, all settings");
     gfx->setCursor(MARGIN + 20, 125);
-    gfx->print("- Steps, games, settings reset");
+    gfx->print("- Battery learning data");
     gfx->setCursor(MARGIN + 20, 145);
-    gfx->print("- SD card data PRESERVED");
-    gfx->setCursor(MARGIN + 20, 165);
-    gfx->print("- Firmware NOT affected");
-    gfx->setCursor(MARGIN + 20, 185);
-    gfx->print("- Device will restart");
+    gfx->print("- Usage patterns");
     
-    // Reset button
-    drawButton(MARGIN + 50, 260, LCD_WIDTH - 2*MARGIN - 100, 60, "RESET ALL", COL_DANGER);
+    gfx->setTextColor(COL_SUCCESS);
+    gfx->setCursor(MARGIN + 20, 175);
+    gfx->print("PRESERVED: SD card, firmware");
+    
+    drawButton(MARGIN + 50, 250, LCD_WIDTH - 2*MARGIN - 100, 60, "RESET ALL", COL_DANGER);
     
     gfx->setTextSize(1);
     gfx->setTextColor(COL_TEXT_DIMMER);
@@ -1227,38 +1394,26 @@ void drawSubClockWorld() {
     
     gfx->setTextColor(COL_TEXT);
     gfx->setTextSize(2);
-    gfx->setCursor(MARGIN, 20);
+    gfx->setCursor(MARGIN, 15);
     gfx->print("< World Clock");
     
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 70, COL_CARD);
-    gfx->setTextSize(1);
-    gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 15, 90);
-    gfx->print("NEW YORK");
-    gfx->setTextSize(3);
-    gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 15, 110);
-    gfx->printf("%02d:%02d", (clockHour + 20) % 24, clockMinute);
+    const char* cities[] = {"New York", "London", "Tokyo"};
+    int offsets[] = {-5, 0, 9};  // GMT offsets
     
-    drawCard(MARGIN, 165, LCD_WIDTH - 2*MARGIN, 70, COL_CARD);
-    gfx->setTextSize(1);
-    gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 15, 175);
-    gfx->print("LONDON");
-    gfx->setTextSize(3);
-    gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 15, 195);
-    gfx->printf("%02d:%02d", (clockHour + 5) % 24, clockMinute);
-    
-    drawCard(MARGIN, 250, LCD_WIDTH - 2*MARGIN, 70, COL_CARD);
-    gfx->setTextSize(1);
-    gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 15, 260);
-    gfx->print("TOKYO");
-    gfx->setTextSize(3);
-    gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 15, 280);
-    gfx->printf("%02d:%02d", (clockHour + 14) % 24, clockMinute);
+    for (int i = 0; i < 3; i++) {
+        drawCard(MARGIN, 60 + i * 90, LCD_WIDTH - 2*MARGIN, 80, COL_CARD);
+        
+        gfx->setTextSize(1);
+        gfx->setTextColor(COL_TEXT_DIM);
+        gfx->setCursor(MARGIN + 15, 70 + i * 90);
+        gfx->print(cities[i]);
+        
+        int h = (clockHour + offsets[i] + 24) % 24;
+        gfx->setTextSize(3);
+        gfx->setTextColor(COL_TEXT);
+        gfx->setCursor(MARGIN + 15, 95 + i * 90);
+        gfx->printf("%02d:%02d", h, clockMinute);
+    }
     
     gfx->setTextSize(1);
     gfx->setTextColor(COL_TEXT_DIMMER);
@@ -1271,25 +1426,29 @@ void drawSubStepsGraph() {
     
     gfx->setTextColor(COL_TEXT);
     gfx->setTextSize(2);
-    gfx->setCursor(MARGIN, 20);
+    gfx->setCursor(MARGIN, 15);
     gfx->print("< Weekly Steps");
     
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 280, COL_CARD);
+    drawCard(MARGIN, 50, LCD_WIDTH - 2*MARGIN, 300, COL_CARD);
     
     const char* days[] = {"M", "T", "W", "T", "F", "S", "S"};
     int16_t barW = 35;
     int16_t barSpacing = 10;
-    int16_t chartY = 320;
-    int16_t chartH = 180;
+    int16_t chartY = 310;
+    int16_t chartH = 200;
+    
+    uint32_t maxSteps = 1;
+    for (int i = 0; i < 7; i++) {
+        if (stepHistory[i] > maxSteps) maxSteps = stepHistory[i];
+    }
     
     for (int i = 0; i < 7; i++) {
         int16_t barX = MARGIN + 20 + i * (barW + barSpacing);
-        float ratio = (float)stepHistory[i] / 10000.0f;
-        if (ratio > 1.0f) ratio = 1.0f;
-        int16_t barH = (int16_t)(chartH * ratio);
+        int16_t barH = (stepHistory[i] * chartH) / maxSteps;
+        if (barH < 5) barH = 5;
         
-        uint16_t barColor = (i == currentDay) ? COL_STEPS : COL_CARD_LIGHT;
-        gfx->fillRoundRect(barX, chartY - barH, barW, barH, 4, barColor);
+        uint16_t col = (i == currentDay) ? COL_STEPS : COL_CARD_LIGHT;
+        gfx->fillRoundRect(barX, chartY - barH, barW, barH, 4, col);
         
         gfx->setTextSize(1);
         gfx->setTextColor(COL_TEXT_DIM);
@@ -1297,7 +1456,6 @@ void drawSubStepsGraph() {
         gfx->print(days[i]);
     }
     
-    gfx->setTextSize(1);
     gfx->setTextColor(COL_TEXT_DIMMER);
     gfx->setCursor(LCD_WIDTH/2 - 35, LCD_HEIGHT - 25);
     gfx->print("Swipe up to exit");
@@ -1308,23 +1466,25 @@ void drawSubGamesClicker() {
     
     gfx->setTextColor(COL_TEXT);
     gfx->setTextSize(2);
-    gfx->setCursor(MARGIN, 20);
+    gfx->setCursor(MARGIN, 15);
     gfx->print("< Clicker");
     
-    drawCard(MARGIN, 80, LCD_WIDTH - 2*MARGIN, 100, COL_CARD);
+    drawCard(MARGIN, 60, LCD_WIDTH - 2*MARGIN, 100, COL_CARD);
+    
     gfx->setTextSize(2);
     gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(MARGIN + 30, 95);
+    gfx->setCursor(MARGIN + 30, 80);
     gfx->print("Score:");
+    
     gfx->setTextSize(4);
     gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(MARGIN + 100, 125);
+    gfx->setCursor(MARGIN + 100, 105);
     gfx->printf("%lu", clickerScore);
     
-    gfx->fillCircle(LCD_WIDTH / 2, 270, 70, COL_GAMES);
+    gfx->fillCircle(LCD_WIDTH / 2, 260, 70, COL_GAMES);
     gfx->setTextSize(3);
     gfx->setTextColor(COL_TEXT);
-    gfx->setCursor(LCD_WIDTH / 2 - 40, 255);
+    gfx->setCursor(LCD_WIDTH / 2 - 40, 245);
     gfx->print("CLICK");
     
     gfx->setTextSize(1);
@@ -1334,7 +1494,7 @@ void drawSubGamesClicker() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  GESTURE DETECTION & TOUCH HANDLING
+//  GESTURE HANDLING
 // ═══════════════════════════════════════════════════════════════════════════
 
 GestureType detectGesture() {
@@ -1343,40 +1503,47 @@ GestureType detectGesture() {
     int16_t dx = gestureEndX - gestureStartX;
     int16_t dy = gestureEndY - gestureStartY;
     
-    // Check if it's a tap (small movement)
-    if (abs(dx) < 30 && abs(dy) < 30) {
-        return GESTURE_TAP;
-    }
+    if (abs(dx) < 30 && abs(dy) < 30) return GESTURE_TAP;
     
     if (abs(dx) > abs(dy)) {
-        if (abs(dx) > SWIPE_THRESHOLD) {
-            return (dx > 0) ? GESTURE_RIGHT : GESTURE_LEFT;
-        }
+        if (abs(dx) > SWIPE_THRESHOLD) return (dx > 0) ? GESTURE_RIGHT : GESTURE_LEFT;
     } else {
-        if (abs(dy) > SWIPE_THRESHOLD) {
-            return (dy > 0) ? GESTURE_DOWN : GESTURE_UP;
-        }
+        if (abs(dy) > SWIPE_THRESHOLD) return (dy > 0) ? GESTURE_DOWN : GESTURE_UP;
     }
     
     return GESTURE_NONE;
 }
 
 void handleTap() {
-    // Handle button taps
+    // Dismiss low battery popup
+    if (showingLowBatteryPopup) {
+        showingLowBatteryPopup = false;
+        redrawNeeded = true;
+        return;
+    }
     
-    // Check reset button on reset screen
-    if (currentMainCard == CARD_SYSTEM && currentSubCard == SUB_SYSTEM_RESET) {
+    // System card - battery saver toggle
+    if (currentMainCard == CARD_SYSTEM && currentSubCard == SUB_NONE) {
+        if (touchY > 215 && touchY < 240) {
+            toggleBatterySaver();
+            redrawNeeded = true;
+            return;
+        }
+    }
+    
+    // Reset button
+    if (currentSubCard == SUB_SYSTEM_RESET) {
         if (touchX > MARGIN + 50 && touchX < LCD_WIDTH - MARGIN - 50 &&
-            touchY > 260 && touchY < 320) {
+            touchY > 250 && touchY < 310) {
             factoryReset();
             return;
         }
     }
     
     // Clicker game
-    if (currentMainCard == CARD_GAMES && currentSubCard == SUB_GAMES_CLICKER) {
+    if (currentSubCard == SUB_GAMES_CLICKER) {
         if (touchX > LCD_WIDTH/2 - 70 && touchX < LCD_WIDTH/2 + 70 &&
-            touchY > 200 && touchY < 340) {
+            touchY > 190 && touchY < 330) {
             clickerScore++;
             redrawNeeded = true;
             return;
@@ -1385,9 +1552,8 @@ void handleTap() {
     
     // Music play/pause
     if (currentMainCard == CARD_MUSIC && currentSubCard == SUB_NONE) {
-        int16_t controlCX = LCD_WIDTH / 2;
-        if (touchX > controlCX - 25 && touchX < controlCX + 25 &&
-            touchY > 225 && touchY < 275) {
+        if (touchX > LCD_WIDTH/2 - 25 && touchX < LCD_WIDTH/2 + 25 &&
+            touchY > 215 && touchY < 265) {
             musicPlaying = !musicPlaying;
             redrawNeeded = true;
             return;
@@ -1397,14 +1563,9 @@ void handleTap() {
 
 void handleGesture(GestureType gesture) {
     if (gesture == GESTURE_NONE) return;
-    
-    if (gesture == GESTURE_TAP) {
-        handleTap();
-        return;
-    }
+    if (gesture == GESTURE_TAP) { handleTap(); return; }
     
     if (currentSubCard == SUB_NONE) {
-        // Main card navigation
         switch (gesture) {
             case GESTURE_LEFT:
                 currentMainCard = (MainCard)((currentMainCard + 1) % MAIN_CARD_COUNT);
@@ -1415,12 +1576,11 @@ void handleGesture(GestureType gesture) {
                 redrawNeeded = true;
                 break;
             case GESTURE_DOWN:
-                subCardIndex = 0;
                 switch (currentMainCard) {
                     case CARD_CLOCK: currentSubCard = SUB_CLOCK_WORLD; break;
                     case CARD_STEPS: currentSubCard = SUB_STEPS_GRAPH; break;
                     case CARD_GAMES: currentSubCard = SUB_GAMES_CLICKER; break;
-                    case CARD_SYSTEM: currentSubCard = SUB_SYSTEM_RESET; break;
+                    case CARD_SYSTEM: currentSubCard = SUB_SYSTEM_BATTERY_STATS; break;
                     default: break;
                 }
                 redrawNeeded = true;
@@ -1428,12 +1588,50 @@ void handleGesture(GestureType gesture) {
             default: break;
         }
     } else {
-        // Sub-card navigation
         if (gesture == GESTURE_UP) {
             currentSubCard = SUB_NONE;
-            subCardIndex = 0;
             redrawNeeded = true;
+        } else if (gesture == GESTURE_LEFT || gesture == GESTURE_RIGHT) {
+            // Navigate between sub-cards in System
+            if (currentMainCard == CARD_SYSTEM) {
+                if (gesture == GESTURE_LEFT) {
+                    if (currentSubCard == SUB_SYSTEM_BATTERY_STATS) currentSubCard = SUB_SYSTEM_USAGE;
+                    else if (currentSubCard == SUB_SYSTEM_USAGE) currentSubCard = SUB_SYSTEM_RESET;
+                    else currentSubCard = SUB_SYSTEM_BATTERY_STATS;
+                } else {
+                    if (currentSubCard == SUB_SYSTEM_RESET) currentSubCard = SUB_SYSTEM_USAGE;
+                    else if (currentSubCard == SUB_SYSTEM_USAGE) currentSubCard = SUB_SYSTEM_BATTERY_STATS;
+                    else currentSubCard = SUB_SYSTEM_RESET;
+                }
+                redrawNeeded = true;
+            }
         }
+    }
+}
+
+void handlePowerButton() {
+    bool inPowerArea = (touchX > LCD_WIDTH - 60 && touchY < 50);
+    
+    if (inPowerArea && !buttonPressed) {
+        buttonPressed = true;
+        buttonPressStart = millis();
+    }
+    else if (!inPowerArea && buttonPressed) {
+        unsigned long duration = millis() - buttonPressStart;
+        buttonPressed = false;
+        
+        if (duration >= BUTTON_LONG_PRESS_MS) {
+            shutdownDevice();
+        } else if (duration > 50) {
+            if (screenOn) screenOff(); else screenOnFunc();
+        }
+    }
+    
+    // Long press progress bar
+    if (buttonPressed && screenOn && millis() - buttonPressStart > 500) {
+        int progress = min((int)((millis() - buttonPressStart - 500) * 100 / (BUTTON_LONG_PRESS_MS - 500)), 100);
+        gfx->fillRect(LCD_WIDTH - 50, 30, 40, 5, COL_CARD);
+        gfx->fillRect(LCD_WIDTH - 50, 30, (40 * progress) / 100, 5, COL_DANGER);
     }
 }
 
@@ -1444,11 +1642,7 @@ void handleTouch() {
         touch.getPoint(&touchX, &touchY);
         lastActivityMs = millis();
         
-        // Wake screen on touch
-        if (!screenOn) {
-            screenOnFunc();
-            return;
-        }
+        if (!screenOn) { screenOnFunc(); return; }
     }
     
     if (t && !lastTouchState) {
@@ -1461,18 +1655,14 @@ void handleTouch() {
         gestureEndY = touchY;
         
         if (millis() - gestureStartTime < SWIPE_TIMEOUT) {
-            GestureType gesture = detectGesture();
-            handleGesture(gesture);
+            handleGesture(detectGesture());
         }
         
         gestureInProgress = false;
         gestureStartX = gestureStartY = gestureEndX = gestureEndY = -1;
     }
     
-    // Handle power button area
-    if (t && screenOn) {
-        handlePowerButton();
-    }
+    if (t && screenOn) handlePowerButton();
     
     lastTouchState = t;
 }
@@ -1484,6 +1674,9 @@ void handleTouch() {
 void serviceClock() {
     if (millis() - lastClockUpdate >= 1000) {
         lastClockUpdate = millis();
+        uint8_t oldHour = clockHour;
+        uint8_t oldDay = currentDay;
+        
         if (hasRTC) {
             rtc.getTime(&clockHour, &clockMinute, &clockSecond);
             uint8_t day, weekday, month, year;
@@ -1493,8 +1686,19 @@ void serviceClock() {
             clockSecond++;
             if (clockSecond >= 60) { clockSecond = 0; clockMinute++; }
             if (clockMinute >= 60) { clockMinute = 0; clockHour++; }
-            if (clockHour >= 24) clockHour = 0;
+            if (clockHour >= 24) { clockHour = 0; currentDay = (currentDay + 1) % 7; }
         }
+        
+        // Hourly stats update
+        if (clockHour != oldHour) {
+            updateHourlyStats();
+        }
+        
+        // Daily stats update
+        if (currentDay != oldDay) {
+            updateDailyStats();
+        }
+        
         if (screenOn && currentMainCard == CARD_CLOCK && currentSubCard == SUB_NONE) {
             redrawNeeded = true;
         }
@@ -1524,11 +1728,17 @@ void serviceSteps() {
 
 void serviceBattery() {
     if (!hasPMU) return;
-    if (millis() - lastBatteryUpdate >= 5000) {
+    if (millis() - lastBatteryUpdate >= 3000) {
         lastBatteryUpdate = millis();
         batteryVoltage = pmu.getBattVoltage();
         batteryPercent = pmu.getBattPercent();
+        isCharging = pmu.isCharging();
         freeRAM = ESP.getFreeHeap();
+        
+        calculateBatteryEstimates();
+        checkLowBattery();
+        
+        if (screenOn && currentMainCard == CARD_SYSTEM) redrawNeeded = true;
     }
 }
 
@@ -1536,10 +1746,7 @@ void serviceMusic() {
     if (musicPlaying && millis() - lastMusicUpdate >= 1000) {
         lastMusicUpdate = millis();
         musicCurrent++;
-        if (musicCurrent >= musicDuration) {
-            musicCurrent = 0;
-            musicPlaying = false;
-        }
+        if (musicCurrent >= musicDuration) { musicCurrent = 0; musicPlaying = false; }
         if (screenOn && currentMainCard == CARD_MUSIC) redrawNeeded = true;
     }
 }
@@ -1548,30 +1755,26 @@ void serviceGames() {
     if (millis() - lastGameRotate >= 300000) {
         lastGameRotate = millis();
         spotlightGame = (spotlightGame + 1) % 3;
-        if (screenOn && currentMainCard == CARD_GAMES && currentSubCard == SUB_NONE) {
-            redrawNeeded = true;
-        }
+        if (screenOn && currentMainCard == CARD_GAMES && currentSubCard == SUB_NONE) redrawNeeded = true;
     }
 }
 
 void serviceWeather() {
-    // Update weather every 30 minutes
-    if (wifiConnected && millis() - lastWeatherUpdate >= 1800000) {
-        fetchWeather();
-    }
+    if (wifiConnected && millis() - lastWeatherUpdate >= 1800000) fetchWeather();
 }
 
 void serviceSave() {
-    // Save every 2 hours (SAVE_INTERVAL_MS)
-    if (millis() - lastSaveTime >= SAVE_INTERVAL_MS) {
-        saveUserData();
-    }
+    if (millis() - lastSaveTime >= SAVE_INTERVAL_MS) saveUserData();
 }
 
 void serviceScreenTimeout() {
-    // Auto screen off after SCREEN_OFF_TIMEOUT_MS of inactivity
-    if (screenOn && millis() - lastActivityMs >= SCREEN_OFF_TIMEOUT_MS) {
-        screenOff();
+    unsigned long timeout = batterySaverMode ? SCREEN_OFF_TIMEOUT_SAVER_MS : SCREEN_OFF_TIMEOUT_MS;
+    if (screenOn && millis() - lastActivityMs >= timeout) screenOff();
+}
+
+void serviceUsageTracking() {
+    if (millis() - lastUsageUpdate >= 60000) {  // Every minute
+        updateUsageTracking();
     }
 }
 
@@ -1593,10 +1796,12 @@ void renderScreen() {
         }
     } else {
         switch (currentSubCard) {
-            case SUB_CLOCK_WORLD:    drawSubClockWorld();    break;
-            case SUB_STEPS_GRAPH:    drawSubStepsGraph();    break;
-            case SUB_GAMES_CLICKER:  drawSubGamesClicker();  break;
-            case SUB_SYSTEM_RESET:   drawSubSystemReset();   break;
+            case SUB_CLOCK_WORLD:          drawSubClockWorld();     break;
+            case SUB_STEPS_GRAPH:          drawSubStepsGraph();     break;
+            case SUB_GAMES_CLICKER:        drawSubGamesClicker();   break;
+            case SUB_SYSTEM_BATTERY_STATS: drawSubBatteryStats();   break;
+            case SUB_SYSTEM_USAGE:         drawSubUsagePatterns();  break;
+            case SUB_SYSTEM_RESET:         drawSubSystemReset();    break;
             default: break;
         }
     }
@@ -1613,15 +1818,12 @@ void setup() {
     delay(500);
     
     Serial.println("\n═══════════════════════════════════════════");
-    Serial.println("  S3 MiniOS v3.0 - Enhanced Edition");
+    Serial.println("  S3 MiniOS v3.1 - Battery Intelligence");
     Serial.println("═══════════════════════════════════════════\n");
     
-    // I2C init
     Wire.begin(IIC_SDA, IIC_SCL);
     Wire.setClock(400000);
-    Serial.println("[OK] I2C Bus");
     
-    // I/O Expander
     if (expander.begin(XCA9554_ADDR)) {
         expander.pinMode(0, OUTPUT);
         expander.pinMode(1, OUTPUT);
@@ -1634,91 +1836,72 @@ void setup() {
         expander.digitalWrite(1, HIGH);
         expander.digitalWrite(2, HIGH);
         delay(50);
-        Serial.println("[OK] I/O Expander");
     }
     
-    // Display
     gfx->begin();
     gfx->fillScreen(COL_BG);
     for (int i = 0; i <= 255; i += 5) { gfx->setBrightness(i); delay(2); }
-    Serial.println("[OK] AMOLED Display");
     
-    // Splash screen
-    gfx->setTextSize(4);
+    // Splash
+    gfx->setTextSize(3);
     gfx->setTextColor(COL_CLOCK);
-    gfx->setCursor(50, 140);
+    gfx->setCursor(60, 140);
     gfx->print("S3 MiniOS");
     gfx->setTextSize(2);
     gfx->setTextColor(COL_TEXT_DIM);
-    gfx->setCursor(120, 200);
-    gfx->print("v3.0");
+    gfx->setCursor(130, 180);
+    gfx->print("v3.1");
     gfx->setTextSize(1);
-    gfx->setCursor(80, 240);
-    gfx->print("Enhanced Edition");
-    gfx->setCursor(100, 280);
+    gfx->setCursor(70, 210);
+    gfx->print("Battery Intelligence");
+    gfx->setCursor(100, 250);
     gfx->print("Loading...");
     
-    // SD Card
     hasSD = initSDCard();
-    if (hasSD) {
-        gfx->setCursor(100, 300);
-        gfx->print("SD Card: OK");
-    }
-    
-    // Load WiFi from SD
     loadWiFiFromSD();
     
-    // Touch
-    if (touch.begin()) Serial.println("[OK] Touch Controller");
+    if (touch.begin()) Serial.println("[OK] Touch");
+    hasRTC = rtc.begin();
+    if (hasRTC) rtc.getTime(&clockHour, &clockMinute, &clockSecond);
+    hasPMU = pmu.begin();
+    if (hasPMU) { batteryPercent = pmu.getBattPercent(); batteryVoltage = pmu.getBattVoltage(); isCharging = pmu.isCharging(); }
+    hasIMU = imu.begin();
     
-    // RTC
-    hasRTC = rtc.begin(); 
-    if (hasRTC) { 
-        Serial.println("[OK] RTC"); 
-        rtc.getTime(&clockHour, &clockMinute, &clockSecond);
-    }
-    
-    // PMU
-    hasPMU = pmu.begin(); 
-    if (hasPMU) { 
-        Serial.println("[OK] PMU"); 
-        batteryPercent = pmu.getBattPercent(); 
-        batteryVoltage = pmu.getBattVoltage(); 
-    }
-    
-    // IMU
-    hasIMU = imu.begin(); 
-    if (hasIMU) Serial.println("[OK] IMU");
-    
-    // Load saved data
     loadUserData();
     
-    // Connect WiFi
     if (strlen(wifiSSID) > 0) {
-        gfx->setCursor(100, 320);
+        gfx->setCursor(100, 280);
         gfx->print("Connecting WiFi...");
         connectWiFi();
         if (wifiConnected) {
+            getLocationFromIP();
             fetchWeather();
         }
     }
     
     snprintf(weatherLocation, 63, "%s, %s", weatherCity, weatherCountry);
     
+    // Initialize battery stats
+    batteryStats.sessionStartMs = millis();
+    batteryStats.batteryAtHourStart = batteryPercent;
+    screenOnStartMs = millis();
+    
     delay(1000);
     
     Serial.println("\n═══════════════════════════════════════════");
-    Serial.println("  Features:");
-    Serial.println("  - WiFi from SD: /wifi/config.txt");
-    Serial.println("  - Auto-save: every 2 hours");
-    Serial.println("  - Tap top-right: screen ON/OFF");
-    Serial.println("  - Long press: shutdown");
-    Serial.println("  - Battery time estimate");
-    Serial.println("  - Factory reset in System menu");
+    Serial.println("  NEW FEATURES:");
+    Serial.println("  - Usage tracking (24h screen time)");
+    Serial.println("  - ML-style battery estimation");
+    Serial.println("  - Battery Stats graph card");
+    Serial.println("  - Low battery popup warning");
+    Serial.println("  - Battery Saver mode (tap to toggle)");
+    Serial.println("  - Charging animation");
     Serial.println("═══════════════════════════════════════════\n");
     
     lastActivityMs = millis();
     lastSaveTime = millis();
+    lastUsageUpdate = millis();
+    lastHourlyUpdate = millis();
     redrawNeeded = true;
 }
 
@@ -1735,6 +1918,8 @@ void loop() {
     serviceWeather();
     serviceSave();
     serviceScreenTimeout();
+    serviceUsageTracking();
+    updateChargingAnimation();
     handleTouch();
     renderScreen();
     
