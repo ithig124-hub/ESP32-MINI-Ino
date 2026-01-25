@@ -1,133 +1,183 @@
-# Widget OS v1.0
+# Widget OS v2.0 - Premium Edition
 
 **ESP32-S3 Touch AMOLED 1.8" Smartwatch Firmware**
 
-A professional smartwatch OS with 24+ cards, infinite navigation, and real API integrations.
+A professional smartwatch OS with 26+ premium cards, smooth navigation, full sensor fusion compass, and Apple Watch-inspired design.
 
 ---
 
-## ✨ Key Features
+## ✨ Major Improvements in v2.0
 
-### 🧭 Navigation System
-- **Infinite Horizontal Loop** - Swipe left/right cycles through categories forever
-- **Vertical Category Stacks** - Swipe down for sub-cards, up to return
-- **Visual Navigation Dots** - Bottom (categories) and right (sub-cards)
+### 🧭 Full Sensor Fusion Compass
+- **Complementary Filter** - Fuses gyroscope + accelerometer for accurate orientation
+- **Relative Orientation Tracking** - Tracks rotation from initial position
+- **Tilt-Based Level Display** - Bubble level like a carpenter's tool
+- **Gyroscope Rotation Visualization** - Shows roll, pitch, yaw in real-time
+- **Smooth Needle Animation** - No more jerky 2-line display!
 
-### 🎨 Gradient Themes (8 Options)
-1. Cyber Purple
-2. Ocean Teal
-3. Sunset Orange
-4. Neon Pink
-5. Lime Green
-6. Fire Red
-7. Deep Space
-8. Mint Fresh
+### 🎨 Premium Apple Watch-Inspired Design
+- **8 New Gradient Themes** - Midnight, Ocean, Sunset, Aurora, Forest, Ruby, Graphite, Mint
+- **Glassmorphism Cards** - Frosted glass effect with shadows
+- **Pill-Shaped Navigation Dots** - Active indicator stretches like Apple Watch
+- **Color-Coded UI Elements** - Semantic colors for status (green=good, red=warning)
 
-### 📱 All Cards (24+)
+### 🎮 Enhanced Games
+- **Blackjack** - Visual playing cards with suits and ranks
+- **Dino Run** - Pixel-style dinosaur with particle ground effects
+- **Yes/No Spinner** - Glowing result ring with color feedback
+
+### 🔄 Smooth Navigation
+- **Gesture Velocity Detection** - Faster swipes = quicker transitions
+- **Infinite Horizontal Loop** - Seamless category cycling
+- **Visual Transition States** - Direction indicators during swipes
+
+---
+
+## 🧭 Navigation System
+
+### Core Structure
+The UI is built from **main cards (categories)** arranged in a horizontal, infinite loop.
+
+```
+Clock → Compass → Activity → Games → Weather → Stocks → Media → Timer → Streak → Calendar → Settings → System → Clock → ...
+```
+
+### Gesture Controls
+| Gesture | Action |
+|---------|--------|
+| **Swipe Left/Right** | Change category (infinite loop) |
+| **Swipe Down** | Enter sub-cards within category |
+| **Swipe Up** | Return to main card of category |
+
+### Navigation Rules
+- Horizontal swipes ALWAYS move between main cards
+- Entering a category always shows its main card first
+- Leaving a category resets to main card
+- Sub-cards are only accessible via vertical swipes
+
+---
+
+## 📱 All Cards (26+)
 
 | Category | Cards |
 |----------|-------|
-| **Clock** | Digital Clock, Analog Clock |
-| **Compass** | Real compass with sunrise/sunset |
-| **Activity** | Steps, Activity Rings, Workouts, Distance |
-| **Games** | Blackjack, Dino Runner, Yes/No Spinner |
+| **Clock** | Digital Clock (with status bar), Analog Clock |
+| **Compass** | Sensor Fusion Compass, Bubble Level, Gyro Rotation |
+| **Activity** | Steps (gradient), Activity Rings, Workouts, Distance |
+| **Games** | Blackjack (visual cards), Dino Runner, Yes/No Spinner |
 | **Weather** | Current Weather, 3-Day Forecast |
-| **Stocks** | Stocks, Crypto |
+| **Stocks** | Stock Prices, Cryptocurrency |
 | **Media** | Music Player, Gallery |
 | **Timer** | Sand Timer (5min), Stopwatch, Countdown |
-| **Streak** | Step Streak, Game Streak, Achievements |
-| **Calendar** | Monthly Calendar (Jan 25, 2026) |
-| **Settings** | Brightness, Theme, Timeout, Goal |
+| **Streak** | Step Streak (fire), Game Streak, Achievements |
+| **Calendar** | Monthly Calendar (Jan 2026) |
+| **Settings** | Brightness, Theme, Timeout, Compass Calibration |
 | **System** | Battery, System Info |
 
 ---
 
-## 🔌 API Integration
+## 🧭 Compass Modes
 
-| Service | API Key | Data |
-|---------|---------|------|
-| **OpenWeather** | `3795c13a...` | Temperature, conditions |
-| **Alpha Vantage** | `UHLX28BF...` | Stock prices |
-| **CoinAPI** | `11afad22...` | BTC, ETH prices |
+### 1. Sensor Fusion Compass (Main)
+- **Algorithm**: Complementary filter (98% gyro, 2% accel)
+- **Features**:
+  - Rotating compass rose with cardinal directions
+  - Red/Blue needle (N/S)
+  - Degree heading display (0-360°)
+  - Direction label (N, NE, E, SE, S, SW, W, NW)
+  - Auto-calibration when device is level
 
-When WiFi connects, the watch:
-1. Syncs time via NTP (GMT+8)
-2. Fetches weather data
-3. Fetches crypto prices
+### 2. Bubble Level / Tilt Display
+- **Purpose**: Shows if device is level
+- **Features**:
+  - Circular bubble that moves with tilt
+  - Crosshairs for reference
+  - Green = Level, Red = Tilted
+  - X/Y tilt values in degrees
+
+### 3. Gyroscope Rotation Tracking
+- **Purpose**: Shows 3D orientation changes
+- **Features**:
+  - Three concentric arcs (Roll, Pitch, Yaw)
+  - Color-coded: Red=Pitch, Green=Roll, Blue=Yaw
+  - Real-time degree values
+
+---
+
+## 🎨 Gradient Themes (8 Options)
+
+| Theme | Colors |
+|-------|--------|
+| **Midnight** | Dark grays with blue accents |
+| **Ocean** | Deep blues and teals |
+| **Sunset** | Orange to gold gradient |
+| **Aurora** | Purple to pink |
+| **Forest** | Deep greens |
+| **Ruby** | Red tones |
+| **Graphite** | Neutral grays |
+| **Mint** | Fresh green and white |
 
 ---
 
 ## 🎮 Games
 
 ### Blackjack
-- Full card game with Hit/Stand
-- Streak tracking
-- Win counter
+- **Visual Cards**: Shows rank (A, 2-10, J, Q, K) and suit color
+- **Animations**: Card shadows, golden buttons
+- **Features**: Hit/Stand buttons, win streak tracking
+- **Casino Feel**: Green felt background, gold accents
 
 ### Dino Runner
-- Tap "JUMP" button to jump
-- Avoid obstacles
-- Score counter
+- **Character**: Pixel-style green dinosaur with eye
+- **Environment**: Particle ground texture, red obstacles
+- **Controls**: Large "JUMP!" button with glow
+- **Game Over**: Overlay with final score
 
 ### Yes/No Spinner
-- Spinning animation
-- Random answers: Yes, No, Maybe, Ask Again, Definitely, Never
+- **Display**: Large result in center circle
+- **Feedback**: Glowing ring (green=positive, red=negative)
+- **Answers**: Yes, No, Maybe, Ask Again, Definitely, Never
 
 ---
 
-## ⏱️ Timers
+## ⚙️ Sensor Fusion Details
 
-### Sand Timer
-- Fixed 5-minute duration
-- Hourglass visualization
-- **Notification**: Screen flashes Red/Green/Blue when complete
+### Complementary Filter Algorithm
+```cpp
+// Fuse accelerometer (long-term accuracy) with gyroscope (short-term accuracy)
+roll = 0.98 * (roll + gyro_roll * dt) + 0.02 * accel_roll;
+pitch = 0.98 * (pitch + gyro_pitch * dt) + 0.02 * accel_pitch;
+yaw += gyro_yaw * dt;  // Integrated with drift compensation
+```
 
-### Stopwatch
-- Start/Pause/Reset
-- MM:SS.CC display
+### Calibration
+- **Auto-Calibrate**: When device is held level for 1+ second
+- **Manual Calibrate**: Via Settings → Calibrate Compass
+- **Reference Point**: Initial orientation becomes "North"
 
-### Countdown
-- Configurable duration
-
----
-
-## 📊 Streaks
-
-### Step Streak
-- Days in a row hitting step goal
-- Fire icon
-
-### Game Streak
-- Blackjack wins in a row
-- Win/Total games stats
-
-### Achievements
-- 10K Steps
-- Win 5 Games
-- 7 Day Streak
+### Why No True North?
+The QMI8658 IMU has accelerometer and gyroscope, but **no magnetometer**. True north requires a magnetometer to sense Earth's magnetic field. Our pseudo-compass shows **relative orientation** from where you started.
 
 ---
 
-## ⚙️ Settings
+## 🔌 API Integration
 
-| Setting | Options |
-|---------|---------|
-| **Brightness** | Slider (20-255) |
-| **Theme** | 8 gradient themes |
-| **Screen Timeout** | 1, 2, 3, 5, 7, 10 minutes |
-| **Daily Goal** | Step target |
+| Service | Usage |
+|---------|-------|
+| **OpenWeather** | Temperature, conditions for Sydney |
+| **CoinAPI** | BTC, ETH prices |
+| **Alpha Vantage** | Stock prices |
+| **NTP** | Time sync (GMT+8) |
 
 ---
 
 ## 💾 Data Persistence
 
-All user data saved to SPIFFS:
-- Steps count
-- Streaks
-- Settings
-- Game stats
-
-Data saves every 30 seconds.
+All user data saved to SPIFFS every 30 seconds:
+- Steps count & streaks
+- Game statistics
+- Settings (theme, brightness, timeout)
+- Compass calibration state
 
 ---
 
@@ -138,29 +188,19 @@ Data saves every 30 seconds.
 | MCU | ESP32-S3 |
 | Display | 1.8" AMOLED (368×448) |
 | Touch | FT3168 |
-| IMU | QMI8658 |
+| IMU | QMI8658 (Accel + Gyro) |
 | RTC | PCF85063 |
 | PMU | AXP2101 |
-
----
-
-## 📶 WiFi
-
-```cpp
-SSID: "Optus_9D2E3D"
-Password: "snucktemptGLeQU"
-Timezone: GMT+8
-```
 
 ---
 
 ## 📁 Files
 
 ```
-/app/firmware/
-├── S3_MiniOS.ino    # Main firmware (~2200 lines)
-├── pin_config.h     # Hardware pins
-└── README.md        # This file
+/app/esp32_project/
+├── S3_MiniOS.ino    # Main firmware (~3400 lines)
+├── pin_config.h     # Hardware pin definitions
+└── README.md        # This documentation
 ```
 
 ---
@@ -175,28 +215,55 @@ Timezone: GMT+8
    - ArduinoJson
    - XPowersLib
    - SensorLib
-3. Select board: ESP32S3 Dev Module
-4. Upload!
+3. Select board: **ESP32S3 Dev Module**
+4. Flash size: 16MB
+5. PSRAM: OPI PSRAM
+6. Upload!
 
 ---
 
 ## 📱 Navigation Guide
 
 ```
-┌─────────────────────────────────────┐
-│     ← SWIPE LEFT/RIGHT →            │
-│     (Change Category - Infinite)    │
-│                                     │
-│           ↓ SWIPE DOWN              │
-│           (Enter Sub-cards)         │
-│                                     │
-│           ↑ SWIPE UP                │
-│           (Return to Main)          │
-│                                     │
-│  [●][○][○][○][○] ← Category dots    │
-└─────────────────────────────────────┘
+┌────────────────────────────────────────┐
+│     ← SWIPE LEFT/RIGHT →               │
+│     (Change Category - Infinite Loop)  │
+│                                        │
+│           ↓ SWIPE DOWN                 │
+│           (Enter Sub-cards)            │
+│                                        │
+│           ↑ SWIPE UP                   │
+│           (Return to Main)             │
+│                                        │
+│  [━━][●][●][●][●] ← Category dots      │
+│                            ●           │
+│                            ●  Sub-card │
+│                            ●  dots     │
+└────────────────────────────────────────┘
 ```
 
 ---
 
-**Widget OS v1.0** - Built for ESP32-S3 Touch AMOLED 1.8"
+**Widget OS v2.0** - Premium Edition
+Built for ESP32-S3 Touch AMOLED 1.8"
+
+---
+
+## v2.1 Updates
+
+### Bug Fixes
+- **Dino Jump Fixed**: Proper physics-based jumping with gravity and velocity
+- **Theme Switching**: Instant theme changes (removed save delay)
+- **Reduced Lag**: Compass/sensor updates optimized to 150ms intervals
+
+### New Features
+- **Breathe Card**: Apple Watch-style breathing exercise with animated expanding circle
+  - 4 second inhale → 2 second hold → 6 second exhale cycle
+  - Calming teal gradient design
+  - Visual breathing guide
+
+### Improved
+- **Settings Card**: Theme preview strip showing current gradient + accent colors
+- **Dino Physics**: Realistic parabolic jump arc using velocity + gravity
+
+### Card Count: 27+ cards
