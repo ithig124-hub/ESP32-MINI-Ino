@@ -1,94 +1,113 @@
 /**
- * ESP32-S3-Touch-AMOLED-2.06 Pin Configuration
- * Adapted from 1.8" version for 2.06" board
- * Based on official Waveshare pinout
+ * ═══════════════════════════════════════════════════════════════════════════════
+ *  PIN CONFIGURATION HEADER
+ *  ESP32-S3-Touch-AMOLED-2.06 (Waveshare)
+ *  
+ *  Based on official Waveshare repository:
+ *  https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-2.06
+ * ═══════════════════════════════════════════════════════════════════════════════
  */
 
 #pragma once
 
-// Power chip define (required for XPowersLib)
+// ═══════════════════════════════════════════════════════════════════════════════
+//  POWER MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
 #define XPOWERS_CHIP_AXP2101
 
-// ============================================
-// DISPLAY (QSPI - CO5300 AMOLED)
-// ============================================
-#define LCD_SDIO0       4
-#define LCD_SDIO1       5
-#define LCD_SDIO2       6
-#define LCD_SDIO3       7
-#define LCD_SCLK        11
-#define LCD_CS          12
-#define LCD_RESET       8       // Direct GPIO (not via expander)
-#define LCD_WIDTH       410     // 2.06" display width
-#define LCD_HEIGHT      502     // 2.06" display height
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DISPLAY - CO5300 QSPI AMOLED (Round 410x502)
+// ═══════════════════════════════════════════════════════════════════════════════
+#define LCD_SDIO0       4       // QSPI_SIO0
+#define LCD_SDIO1       5       // QSPI_SI1
+#define LCD_SDIO2       6       // QSPI_SI2
+#define LCD_SDIO3       7       // QSPI_SI3
+#define LCD_SCLK        11      // QSPI_SCL
+#define LCD_CS          12      // LCD_CS
+#define LCD_RESET       8       // LCD_RESET
+#define LCD_TE          13      // LCD_TE (Tearing Effect)
 
-// ============================================
-// I2C BUS (ALL PERIPHERALS)
-// ============================================
+#define LCD_WIDTH       410
+#define LCD_HEIGHT      502
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  I2C BUS (Shared: Touch, IMU, RTC, PMU, Codec)
+// ═══════════════════════════════════════════════════════════════════════════════
 #define IIC_SDA         15
 #define IIC_SCL         14
 
-// ============================================
-// TOUCH CONTROLLER (FT3168)
-// ============================================
-#define TP_INT          38      // Changed from GPIO 21 (1.8") to GPIO 38 (2.06")
-#define TP_RESET        9       // Direct GPIO (not via expander)
-#define FT3168_ADDR     0x38
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TOUCH - FT3168
+// ═══════════════════════════════════════════════════════════════════════════════
+#define TP_INT          38      // Touch Interrupt
+#define TP_RESET        9       // Touch Reset
 
-// ============================================
-// NOTE: XCA9554 I/O EXPANDER NOT PRESENT
-// The 2.06" board does NOT have XCA9554 expander
-// LCD and Touch resets are direct GPIO pins
-// ============================================
+// I2C Address (default)
+#define FT3168_DEVICE_ADDRESS   0x38
 
-// ============================================
-// POWER MANAGEMENT (AXP2101)
-// ============================================
-#define AXP2101_ADDR    0x34
+// ═══════════════════════════════════════════════════════════════════════════════
+//  IMU - QMI8658 (6-Axis Accelerometer + Gyroscope)
+// ═══════════════════════════════════════════════════════════════════════════════
+#define IMU_INT         21      // IMU Interrupt
 
-// ============================================
-// RTC (PCF85063)
-// ============================================
-#define PCF85063_ADDR   0x51
+// I2C Addresses
+#define QMI8658_L_SLAVE_ADDRESS 0x6B
+#define QMI8658_H_SLAVE_ADDRESS 0x6A
 
-// ============================================
-// IMU / ACCELEROMETER (QMI8658)
-// ============================================
-#define QMI8658_ADDR    0x6B
+// ═══════════════════════════════════════════════════════════════════════════════
+//  RTC - PCF85063
+// ═══════════════════════════════════════════════════════════════════════════════
+#define RTC_INT         39      // RTC Interrupt
 
-// ============================================
-// AUDIO CODEC (ES8311)
-// ============================================
+// I2C Address
+#define PCF85063_SLAVE_ADDRESS  0x51
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PMU - AXP2101 (Power Management)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Uses shared I2C bus (IIC_SDA, IIC_SCL)
+#define AXP2101_SLAVE_ADDRESS   0x34
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SD CARD (SPI Mode)
+// ═══════════════════════════════════════════════════════════════════════════════
+#define SDMMC_CLK       2       // SD_SCK
+#define SDMMC_CMD       1       // SD_MOSI
+#define SDMMC_DATA      3       // SD_MISO
+#define SDMMC_CS        17      // SD_CS
+
+// For compatibility with SD_MMC library
+constexpr int SD_CLK  = SDMMC_CLK;
+constexpr int SD_MOSI = SDMMC_CMD;
+constexpr int SD_MISO = SDMMC_DATA;
+constexpr int SD_CS   = SDMMC_CS;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  AUDIO - ES8311 (Codec) + ES7210 (ADC)
+// ═══════════════════════════════════════════════════════════════════════════════
+#define I2S_MCLK        16      // I2S Master Clock
+#define I2S_SCLK        41      // I2S Bit Clock
+#define I2S_LRCK        45      // I2S Word Select (L/R Clock)
+#define I2S_DOUT        42      // I2S Data Out (to codec)
+#define I2S_DIN         40      // I2S Data In (from ADC)
+#define PA_CTRL         46      // Audio Power Amplifier Control
+
+// I2C Addresses for audio ICs
 #define ES8311_ADDR     0x18
+#define ES7210_ADDR     0x40
 
-// I2S Pins (ES8311 Audio) - 2.06" board configuration
-#define I2S_MCK_IO      16
-#define I2S_BCK_IO      41
-#define I2S_WS_IO       45
-#define I2S_DO_IO       42
-#define I2S_DI_IO       40
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SYSTEM BUTTONS
+// ═══════════════════════════════════════════════════════════════════════════════
+#define BOOT_BUTTON     0       // Boot/Flash button (GPIO0)
+#define PWR_BUTTON      10      // Power button
 
-// Alternative I2S naming (for compatibility)
-#define MCLKPIN         16
-#define BCLKPIN         41
-#define WSPIN           45
-#define DOPIN           42
-#define DIPIN           40
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MEMORY CONFIGURATION
+// ═══════════════════════════════════════════════════════════════════════════════
+// 32MB Flash, 8MB PSRAM (OPI PSRAM)
 
-// Power Amplifier
-#define PA_PIN          46
-#define PA              46
-
-// ============================================
-// SD CARD (SDMMC - 1-bit mode)
-// ============================================
-#define SDMMC_CLK       2
-#define SDMMC_CMD       1
-#define SDMMC_DATA      3
-#define SDMMC_CS        17
-
-// ============================================
-// BUTTONS
-// ============================================
-#define BOOT_PIN        0
-#define PWR_PIN         10
+// ═══════════════════════════════════════════════════════════════════════════════
+//  LVGL BUFFER SIZE (for memory allocation)
+// ═══════════════════════════════════════════════════════════════════════════════
+#define LVGL_BUFFER_LINES   50
