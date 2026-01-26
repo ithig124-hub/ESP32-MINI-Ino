@@ -49,6 +49,13 @@
 #include <time.h>
 #include <Arduino.h>
 #include "pin_config.h"
+
+// Fix macro conflict: SensorLib also defines PCF85063_SLAVE_ADDRESS as a const
+// Undefine the macro version so the library's const can be used
+#ifdef PCF85063_SLAVE_ADDRESS
+#undef PCF85063_SLAVE_ADDRESS
+#endif
+
 #include "Arduino_GFX_Library.h"
 #include "Arduino_DriveBus_Library.h"
 #include <Adafruit_XCA9554.h>
@@ -263,6 +270,12 @@ bool screenOn = true;
 unsigned long lastActivityMs = 0;
 unsigned long screenOnStartMs = 0;
 unsigned long screenOffStartMs = 0;
+
+// Power button handling
+bool powerButtonPressed = false;
+unsigned long powerButtonPressStartMs = 0;
+const unsigned long POWER_BUTTON_LONG_PRESS_MS = 3000;  // 3 seconds for shutdown
+const unsigned long POWER_BUTTON_DEBOUNCE_MS = 50;
 
 // Clock
 uint8_t clockHour = 10, clockMinute = 30, clockSecond = 0;
@@ -522,6 +535,12 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
   int32_t touchX = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X);
   int32_t touchY = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y);
 
+  // Validate touch coordinates to prevent invalid data
+  if (touchX < 0 || touchX > LCD_WIDTH || touchY < 0 || touchY > LCD_HEIGHT) {
+    data->state = LV_INDEV_STATE_REL;
+    return;
+  }
+
   if (FT3168->IIC_Interrupt_Flag) {
     FT3168->IIC_Interrupt_Flag = false;
     data->state = LV_INDEV_STATE_PR;
@@ -531,6 +550,7 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
     
     if (!screenOn) {
       screenOnFunc();
+      data->state = LV_INDEV_STATE_REL;  // Prevent touch processing when waking
       return;
     }
 
@@ -550,8 +570,9 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
       int dy = touchCurrentY - touchStartY;
       unsigned long duration = millis() - touchStartMs;
       
-      float velocity = sqrt(dx*dx + dy*dy) / (float)duration;
-      if (duration < 400 && velocity > 0.3 && (abs(dx) > 40 || abs(dy) > 40)) {
+      // Improved gesture detection with better thresholds
+      float velocity = (duration > 0) ? sqrt(dx*dx + dy*dy) / (float)duration : 0;
+      if (duration < 400 && duration > 50 && velocity > 0.3 && (abs(dx) > 40 || abs(dy) > 40)) {
         handleSwipe(dx, dy);
       }
     }
@@ -1279,6 +1300,19 @@ void drawLowBatteryPopup() {
 //  MAIN NAVIGATION
 // ═══════════════════════════════════════════════════════════════════════════════
 void navigateTo(int category, int subCard) {
+    // Prevent navigation during transitions to avoid freezing
+    if (isTransitioning) {
+        return;
+    }
+    
+    // Validate category and subCard bounds
+    if (category < 0 || category >= NUM_CATEGORIES) {
+        category = CAT_CLOCK;
+    }
+    if (subCard < 0 || subCard >= maxSubCards[category]) {
+        subCard = 0;
+    }
+    
     lv_obj_clean(lv_scr_act());
     createGradientBg();
     
@@ -1395,7 +1429,7 @@ void createClockCard() {
     // Day name
     const char* dayNames[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
     lv_obj_t *dayLabel = lv_label_create(card);
-    lv_label_set_text(dayLabel, dayNames[dt.getWeekday()]);
+    lv_label_set_text(dayLabel, dayNames[dt.getWeek()]);
     lv_obj_set_style_text_color(dayLabel, lv_color_hex(0x8E8E93), 0);
     lv_obj_set_style_text_font(dayLabel, &lv_font_montserrat_18, 0);
     lv_obj_align(dayLabel, LV_ALIGN_CENTER, 0, 0);
@@ -1403,7 +1437,7 @@ void createClockCard() {
     // Full date
     char dateBuf[32];
     const char* monthNames[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-    snprintf(dateBuf, sizeof(dateBuf), "%s %d, 20%02d", monthNames[dt.getMonth()-1], dt.getDay(), dt.getYear());
+    snprintf(dateBuf, sizeof(dateBuf), "%s %d, %d", monthNames[dt.getMonth()-1], dt.getDay(), dt.getYear());
     lv_obj_t *dateLabel = lv_label_create(card);
     lv_label_set_text(dateLabel, dateBuf);
     lv_obj_set_style_text_color(dateLabel, theme.accent, 0);
@@ -3500,7 +3534,7 @@ void createUsagePatternsCard() {
         lv_obj_set_style_text_font(dayLbl, &lv_font_montserrat_12, 0);
         lv_obj_align(dayLbl, LV_ALIGN_LEFT_MID, 5, 0);
         
-        bool isToday = (i == dt.getWeekday());
+        bool isToday = (i == dt.getWeek());
         lv_obj_t *bar = lv_obj_create(row);
         lv_obj_set_size(bar, barLen, 12);
         lv_obj_align(bar, LV_ALIGN_LEFT_MID, 45, 0);
@@ -3624,7 +3658,7 @@ void updateStepCount() {
             
             // Update today's history
             RTC_DateTime dt = rtc.getDateTime();
-            userData.stepHistory[dt.getWeekday()] = userData.steps;
+            userData.stepHistory[dt.getWeek()] = userData.steps;
         }
     }
     
@@ -3697,15 +3731,64 @@ void updateChargingAnimation() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  POWER BUTTON HANDLER
+// ═══════════════════════════════════════════════════════════════════════════════
+void handlePowerButton() {
+    static bool lastButtonState = HIGH;
+    static unsigned long lastDebounceTime = 0;
+    
+    bool buttonState = digitalRead(BOOT_BUTTON);
+    
+    // Debounce the button
+    if (buttonState != lastButtonState) {
+        lastDebounceTime = millis();
+    }
+    
+    if ((millis() - lastDebounceTime) > POWER_BUTTON_DEBOUNCE_MS) {
+        // Button is pressed (LOW = pressed on ESP32)
+        if (buttonState == LOW && !powerButtonPressed) {
+            powerButtonPressed = true;
+            powerButtonPressStartMs = millis();
+        }
+        // Button is released
+        else if (buttonState == HIGH && powerButtonPressed) {
+            unsigned long pressDuration = millis() - powerButtonPressStartMs;
+            powerButtonPressed = false;
+            
+            // Long press - Shutdown
+            if (pressDuration >= POWER_BUTTON_LONG_PRESS_MS) {
+                USBSerial.println("Power button long press - Shutting down");
+                shutdownDevice();
+            }
+            // Short press - Toggle screen
+            else if (pressDuration >= POWER_BUTTON_DEBOUNCE_MS) {
+                USBSerial.println("Power button short press - Toggle screen");
+                if (screenOn) {
+                    screenOff();
+                } else {
+                    screenOnFunc();
+                }
+            }
+        }
+    }
+    
+    lastButtonState = buttonState;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  SETUP
 // ═══════════════════════════════════════════════════════════════════════════════
 void setup() {
     USBSerial.begin(115200);
     delay(100);
     USBSerial.println("\n═══════════════════════════════════════════════════════");
-    USBSerial.println("   S3 MiniOS v4.0 - ULTIMATE PREMIUM EDITION");
+    USBSerial.println("   Widget OS v4.0 - ULTIMATE PREMIUM EDITION");
     USBSerial.println("   LVGL UI + Battery Intelligence");
     USBSerial.println("═══════════════════════════════════════════════════════\n");
+    
+    // Initialize power button (GPIO0 - BOOT button)
+    pinMode(BOOT_BUTTON, INPUT_PULLUP);
+    USBSerial.println("[INIT] Power button configured (GPIO0)");
     
     // Initialize I2C
     Wire.begin(IIC_SDA, IIC_SCL);
@@ -3738,7 +3821,7 @@ void setup() {
     USBSerial.println("[OK] Display (SH8601 368x448)");
     
     // Initialize touch
-    if (FT3168->IIC_Device_Initialization() == true) {
+    if (FT3168->begin() == true) {
         USBSerial.println("[OK] Touch (FT3168)");
         FT3168->IIC_Write_Device_State(FT3168->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
                                        FT3168->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_MONITOR);
@@ -3749,7 +3832,7 @@ void setup() {
     // Initialize sensors
     if (qmi.begin(Wire, QMI8658_L_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
         qmi.configAccelerometer(SensorQMI8658::ACC_RANGE_8G, SensorQMI8658::ACC_ODR_250Hz);
-        qmi.configGyroscope(SensorQMI8658::GYR_RANGE_512DPS, SensorQMI8658::GYR_ODR_250Hz);
+        qmi.configGyroscope(SensorQMI8658::GYR_RANGE_512DPS, SensorQMI8658::GYR_ODR_224_2Hz);
         qmi.enableAccelerometer();
         qmi.enableGyroscope();
         hasIMU = true;
@@ -3759,7 +3842,7 @@ void setup() {
     }
     
     // Initialize RTC
-    if (rtc.begin(Wire, PCF85063_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
+    if (rtc.begin(Wire, IIC_SDA, IIC_SCL)) {
         hasRTC = true;
         USBSerial.println("[OK] RTC (PCF85063)");
     } else {
@@ -3860,6 +3943,9 @@ void setup() {
 //  MAIN LOOP
 // ═══════════════════════════════════════════════════════════════════════════════
 void loop() {
+    // Handle power button first
+    handlePowerButton();
+    
     // Handle LVGL tasks
     lv_task_handler();
     
