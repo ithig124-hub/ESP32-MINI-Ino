@@ -1,10 +1,11 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
  *  PIN CONFIGURATION HEADER
- *  ESP32-S3-Touch-AMOLED-2.06 (Waveshare)
+ *  ESP32-S3-Touch-AMOLED-2.06" (Waveshare)
  *  
- *  Based on official Waveshare repository:
- *  https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-2.06
+ *  IMPORTANT: This is for the 2.06" display, NOT the 1.8" display!
+ *  Display Driver: CO5300 (not SH8601)
+ *  Resolution: 410×502 (not 368×448)
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -16,7 +17,8 @@
 #define XPOWERS_CHIP_AXP2101
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  DISPLAY - CO5300 QSPI AMOLED (Round 410x502)
+//  DISPLAY - CO5300 QSPI AMOLED (410×502 Rectangular)
+//  NOTE: 2.06" uses CO5300 driver, NOT SH8601!
 // ═══════════════════════════════════════════════════════════════════════════════
 #define LCD_SDIO0       4       // QSPI_SIO0
 #define LCD_SDIO1       5       // QSPI_SI1
@@ -25,13 +27,19 @@
 #define LCD_SCLK        11      // QSPI_SCL
 #define LCD_CS          12      // LCD_CS
 #define LCD_RESET       8       // LCD_RESET
-#define LCD_TE          13      // LCD_TE (Tearing Effect)
 
+// 2.06" Display Resolution (larger than 1.8")
 #define LCD_WIDTH       410
 #define LCD_HEIGHT      502
 
+// Column offset required for CO5300 driver
+#define LCD_COL_OFFSET1 22
+#define LCD_ROW_OFFSET1 0
+#define LCD_COL_OFFSET2 0
+#define LCD_ROW_OFFSET2 0
+
 // ═══════════════════════════════════════════════════════════════════════════════
-//  I2C BUS (Shared: Touch, IMU, RTC, PMU, Codec)
+//  I2C BUS (Shared: Touch, IMU, RTC, PMU)
 // ═══════════════════════════════════════════════════════════════════════════════
 #define IIC_SDA         15
 #define IIC_SCL         14
@@ -69,43 +77,22 @@
 #define AXP2101_SLAVE_ADDRESS   0x34
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SD CARD (SPI Mode)
+//  SD CARD (SDMMC Mode)
 // ═══════════════════════════════════════════════════════════════════════════════
 #define SDMMC_CLK       2       // SD_SCK
 #define SDMMC_CMD       1       // SD_MOSI
 #define SDMMC_DATA      3       // SD_MISO
-#define SDMMC_CS        17      // SD_CS
+#define SDMMC_CS        17      // SD_CS (if using SPI mode)
 
 // For compatibility with SD_MMC library
 constexpr int SD_CLK  = SDMMC_CLK;
 constexpr int SD_MOSI = SDMMC_CMD;
 constexpr int SD_MISO = SDMMC_DATA;
-constexpr int SD_CS   = SDMMC_CS;
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  AUDIO - ES8311 (Codec) + ES7210 (ADC)
-// ═══════════════════════════════════════════════════════════════════════════════
-#define I2S_MCLK        16      // I2S Master Clock
-#define I2S_SCLK        41      // I2S Bit Clock
-#define I2S_LRCK        45      // I2S Word Select (L/R Clock)
-#define I2S_DOUT        42      // I2S Data Out (to codec)
-#define I2S_DIN         40      // I2S Data In (from ADC)
-#define PA_CTRL         46      // Audio Power Amplifier Control
-
-// I2C Addresses for audio ICs
-#define ES8311_ADDR     0x18
-#define ES7210_ADDR     0x40
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SYSTEM BUTTONS
 // ═══════════════════════════════════════════════════════════════════════════════
 #define BOOT_BUTTON     0       // Boot/Flash button (GPIO0)
-#define PWR_BUTTON      10      // Power button
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  MEMORY CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════════
-// 32MB Flash, 8MB PSRAM (OPI PSRAM)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  LVGL BUFFER SIZE (for memory allocation)
