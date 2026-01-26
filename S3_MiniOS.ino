@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- *  S3 MiniOS v4.3.1 - ENHANCED UI EDITION (2.06" improvements ported)
+ *  S3 MiniOS v4.3.1 - ENHANCED UI EDITION (2.06 inch improvements ported)
  *  ESP32-S3-Touch-AMOLED-1.8" Smartwatch Firmware
  * ═══════════════════════════════════════════════════════════════════════════════
  *
@@ -28,7 +28,7 @@
  *    • HOLD 5s: Shutdown (screen turns ON to show progress)
  *
  *
- *  === IMPROVEMENTS FROM 2.06" VERSION ===
+ *  === IMPROVEMENTS FROM 2.06 INCH VERSION ===
  *  • Apple-style shutdown progress UI with real-time percentage
  *  • Enhanced navigation lock system (prevents conflicts)
  *  • Better button debouncing with consecutive reading checks
@@ -307,7 +307,7 @@ unsigned long screenOnStartMs = 0;
 unsigned long screenOffStartMs = 0;
 
 // Power button handling - ENHANCED: Apple-style progress, better debouncing
-// Improvements from 2.06": consecutive reading checks, visual feedback
+// Improvements from 2.06 inch: consecutive reading checks, visual feedback
 bool powerButtonPressed = false;
 unsigned long powerButtonPressStartMs = 0;
 const unsigned long POWER_BUTTON_LONG_PRESS_MS = 5000;  // 5 seconds for shutdown
@@ -2060,7 +2060,7 @@ void setup() {
     USBSerial.begin(115200);
     delay(100);
     USBSerial.println("\n═══════════════════════════════════════════════════════");
-    USBSerial.println("   S3 MiniOS v4.3.1 - ENHANCED UI EDITION (2.06" improvements ported)");
+    USBSerial.println("   S3 MiniOS v4.3.1 - ENHANCED UI EDITION (2.06 inch improvements ported)");
     USBSerial.println("═══════════════════════════════════════════════════════");
     USBSerial.println("");
     USBSerial.println("  NAVIGATION:");
