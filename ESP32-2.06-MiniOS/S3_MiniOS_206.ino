@@ -1693,13 +1693,13 @@ void navigateTo(int category, int subCard) {
             createCalendarCard();
             break;
         case CAT_TORCH:
-            if (sub == 0) createTorchCard();
+            if (subCard == 0) createTorchCard();
             else createTorchSettingsCard();
             break;
         case CAT_TOOLS:
-            if (sub == 0) createCalculatorCard();
-            else if (sub == 1) createClickerCard();
-            else if (sub == 2) createReactionTestCard();
+            if (subCard == 0) createCalculatorCard();
+            else if (subCard == 1) createClickerCard();
+            else if (subCard == 2) createReactionTestCard();
             else createDailyChallengeCard();
             break;
         case CAT_SETTINGS:
