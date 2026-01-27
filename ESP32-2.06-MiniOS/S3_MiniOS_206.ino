@@ -1,8 +1,8 @@
 /**
- * ═══════════════════════════════════════════════════════════════════════════════
+ * 
  *  S3 MiniOS v4.1 - FIXED EDITION
  *  ESP32-S3-Touch-AMOLED-2.06" Smartwatch Firmware
- * ═══════════════════════════════════════════════════════════════════════════════
+ * 
  * 
  *  MERGED FEATURES FROM v2.0 + v3.1:
  * 
@@ -31,18 +31,18 @@
  *  - Mini battery estimate on all cards
  * 
  *  === FIXES APPLIED (v4.1) ===
- *  ✅ Power Button: Visual shutdown indicator (hold 5s)
- *  ✅ Navigation: Fixed compass lock, reduced refresh to 5Hz
- *  ✅ NTP Sync: Enhanced logging, verified schedule
+ *   Power Button: Visual shutdown indicator (hold 5s)
+ *   Navigation: Fixed compass lock, reduced refresh to 5Hz
+ *   NTP Sync: Enhanced logging, verified schedule
  *
  *  Hardware: Waveshare ESP32-S3-Touch-AMOLED-2.06
- *    • Display: CO5300 QSPI AMOLED 410x502
- *    • Touch: FT3168
- *    • IMU: QMI8658
- *    • RTC: PCF85063
- *    • PMU: AXP2101
+ *     Display: CO5300 QSPI AMOLED 410x502
+ *     Touch: FT3168
+ *     IMU: QMI8658
+ *     RTC: PCF85063
+ *     PMU: AXP2101
  * 
- * ═══════════════════════════════════════════════════════════════════════════════
+ * 
  */
 
 #include <lvgl.h>
@@ -76,10 +76,10 @@
 #include <Preferences.h>
 #include <esp_sleep.h>
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  USB SERIAL COMPATIBILITY FIX
 //  Fix for 'USBSerial' not declared error - handles different board configs
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 #if ARDUINO_USB_CDC_ON_BOOT
   // USB CDC is enabled at boot - USBSerial maps to Serial
   #define USBSerial Serial
@@ -90,22 +90,22 @@
   #endif
 #endif
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  BOARD-SPECIFIC CONFIGURATION (2.06" CO5300)
 //  NOTE: LCD_WIDTH and LCD_HEIGHT are now defined in pin_config.h
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 // #define LCD_WIDTH and LCD_HEIGHT moved to pin_config.h for better organization
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  WIFI & API CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 #define MAX_WIFI_NETWORKS 5
 #define WIFI_CONFIG_PATH "/wifi/config.txt"
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  AUTOMATIC FREE WIFI CONNECTION SYSTEM
 //  Intelligent Wi-Fi manager that auto-connects to open networks
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 #define MAX_OPEN_NETWORKS 10          // Max open networks to track during scan
 #define WIFI_SCAN_TIMEOUT_MS 5000     // Timeout for WiFi scan
 #define WIFI_CONNECT_TIMEOUT_MS 10000 // Timeout for connection attempts
@@ -151,9 +151,9 @@ const char* CURRENCY_API_KEY = "cur_live_ROqsDnwrNd40cRqegQakXb4pO6tQuihpU9OQr4N
 bool wifiConnected = false;
 bool wifiConfigFromSD = false;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  BATTERY INTELLIGENCE CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 #define SAVE_INTERVAL_MS 7200000UL  // 2 hours
 #define SCREEN_OFF_TIMEOUT_MS 30000
 #define SCREEN_OFF_TIMEOUT_SAVER_MS 10000
@@ -172,17 +172,17 @@ bool wifiConfigFromSD = false;
 #define USAGE_HISTORY_SIZE 24
 #define CARD_USAGE_SLOTS 12  // All categories
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  LVGL CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 #define LVGL_TICK_PERIOD_MS 2
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1 = NULL;
 static lv_color_t *buf2 = NULL;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  HARDWARE OBJECTS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 // Note: USBSerial is defined above with compatibility fix
 // Adafruit_XCA9554 expander;  // Not used on 2.06" board (only on 1.8")
 SensorQMI8658 qmi;
@@ -197,9 +197,14 @@ std::shared_ptr<Arduino_IIC_DriveBus> IIC_Bus = std::make_shared<Arduino_HWIIC>(
 void Arduino_IIC_Touch_Interrupt(void);
 std::unique_ptr<Arduino_IIC> FT3168(new Arduino_FT3x68(IIC_Bus, FT3168_DEVICE_ADDRESS, DRIVEBUS_DEFAULT_VALUE, TP_INT, Arduino_IIC_Touch_Interrupt));
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
+//  IDENTITY SYSTEM - MUST BE DEFINED BEFORE UserData struct
+// 
+#define NUM_IDENTITIES 15
+
+// 
 //  NAVIGATION SYSTEM
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 #define NUM_CATEGORIES 15
 enum Category {
   CAT_CLOCK = 0, CAT_COMPASS, CAT_ACTIVITY, CAT_GAMES,
@@ -219,9 +224,9 @@ float transitionProgress = 0.0;
 unsigned long transitionStartMs = 0;
 const unsigned long TRANSITION_DURATION = 200;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  BATTERY INTELLIGENCE DATA STRUCTURES
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 struct BatteryStats {
     // Current session tracking
     uint32_t screenOnTimeMs;
@@ -270,9 +275,9 @@ bool showingLowBatteryPopup = false;
 uint8_t chargingAnimFrame = 0;
 unsigned long lastChargingAnimMs = 0;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  USER DATA (Persistent) - Combined from v2.0 + v3.1
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 struct UserData {
   // Activity data
   uint32_t steps;
@@ -305,17 +310,22 @@ struct UserData {
   uint32_t lastUseDayOfYear;
 } userData = {0, 10000, 7, 0.0, 0.0, {0}, 0, 0, 0, 0, 200, 1, 0, 0, 0};
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  RUNTIME STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 bool screenOn = true;
 unsigned long lastActivityMs = 0;
 unsigned long screenOnStartMs = 0;
 unsigned long screenOffStartMs = 0;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// Forward declarations for notification system (used in shutdownDevice)
+bool showingNotification = false;
+unsigned long notificationStartMs = 0;
+const unsigned long NOTIFICATION_DURATION = 3000;
+
+// 
 //  SYSTEM BUTTONS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 #define BOOT_BUTTON     0       // Boot/Flash button (GPIO0) - Screen switching
 #define PWR_BUTTON      10      // Power button (GPIO10) - On/Off & Shutdown
 
@@ -356,9 +366,9 @@ String weatherDesc = "Sunny";
 float weatherHigh = 28.0;
 float weatherLow = 18.0;
 
-// ╔═══════════════════════════════════════════════════════════════════════════╗
+// 
 //  PREMIUM WIDGETS DATA STRUCTURES
-// ╚═══════════════════════════════════════════════════════════════════════════╝
+// 
 
 // Currency converter data
 struct CurrencyData {
@@ -404,9 +414,9 @@ uint32_t freeRAM = 234567;
 // Hardware flags
 bool hasIMU = false, hasRTC = false, hasPMU = false, hasSD = false;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  SENSOR FUSION COMPASS STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 const float ALPHA = 0.98;
 const float BETA = 0.02;
 
@@ -419,9 +429,9 @@ bool compassCalibrated = false;
 float tiltX = 0.0, tiltY = 0.0;
 unsigned long lastSensorUpdate = 0;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TIMER STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 bool sandTimerRunning = false;
 unsigned long sandTimerStartMs = 0;
 const unsigned long SAND_TIMER_DURATION = 5 * 60 * 1000;
@@ -437,9 +447,9 @@ unsigned long breatheStartMs = 0;
 
 int countdownSelected = 2;
 int countdownTimes[] = {60, 180, 300, 600};
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TORCH STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 bool torchOn = false;
 int torchBrightness = 255;
 int torchColorIndex = 0;  // 0=White, 1=Red, 2=Green, 3=Blue, 4=Yellow
@@ -447,22 +457,22 @@ uint32_t torchColors[] = {0xFFFFFF, 0xFF0000, 0x00FF00, 0x0000FF, 0xFFFF00};
 const char* torchColorNames[] = {"White", "Red", "Green", "Blue", "Yellow"};
 #define NUM_TORCH_COLORS 5
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  STOPWATCH LAP STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 #define MAX_LAPS 10
 unsigned long lapTimes[MAX_LAPS];
 unsigned long lapTotalTimes[MAX_LAPS];
 int lapCount = 0;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  CLICKER STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 uint32_t clickerCount = 0;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  REACTION TEST STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 bool reactionTestActive = false;
 bool reactionWaiting = false;
 unsigned long reactionStartMs = 0;
@@ -471,9 +481,9 @@ unsigned long lastReactionTime = 0;
 unsigned long bestReactionTime = 9999;
 bool reactionTooEarly = false;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  DAILY CHALLENGE STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 int challengeType = 0;  // 0=Math, 1=Memory, 2=Trivia
 int challengeQuestion = 0;
 int challengeAnswer = 0;
@@ -484,18 +494,18 @@ bool challengeCorrect = false;
 int challengeScore = 0;
 int challengeStreak = 0;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  CALCULATOR STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 double calcValue = 0;
 double calcOperand = 0;
 char calcOperator = ' ';
 bool calcNewNumber = true;
 char calcDisplay[16] = "0";
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  WORLD CLOCK TIMEZONES (Offset from UTC in seconds)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 struct WorldClock {
     const char* city;
     const char* country;
@@ -510,10 +520,9 @@ WorldClock worldClocks[] = {
 #define NUM_WORLD_CLOCKS 3
 
 
-
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  GAME STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 // Blackjack
 int playerCards[10], dealerCards[10];
 int playerCount = 0, dealerCount = 0;
@@ -543,17 +552,17 @@ uint16_t musicCurrent = 86;
 const char* musicTitle = "Night Drive";
 const char* musicArtist = "Synthwave FM";
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TOUCH STATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 int32_t touchStartX = 0, touchStartY = 0;
 int32_t touchCurrentX = 0, touchCurrentY = 0;
 bool touchActive = false;
 unsigned long touchStartMs = 0;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TIMING VARIABLES
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 unsigned long lastClockUpdate = 0;
 unsigned long lastStepUpdate = 0;
 unsigned long lastBatteryUpdate = 0;
@@ -565,9 +574,9 @@ unsigned long lastHourlyUpdate = 0;
 unsigned long lastNTPSync = 0;
 bool ntpSyncedOnce = false;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  PREMIUM GRADIENT THEMES (Apple Watch Style)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 struct GradientTheme {
   const char* name;
   lv_color_t color1;
@@ -589,9 +598,9 @@ GradientTheme gradientThemes[] = {
 };
 #define NUM_THEMES 8
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  SD CARD WALLPAPER SYSTEM
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 #define MAX_SD_WALLPAPERS 10
 #define WALLPAPER_PATH "/wallpaper"
 
@@ -624,23 +633,31 @@ WallpaperTheme gradientWallpapers[] = {
 };
 #define NUM_GRADIENT_WALLPAPERS 7
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  FUNCTION PROTOTYPES
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void navigateTo(int category, int subCard);
 void handleSwipe(int dx, int dy);
 void saveUserData();
 void loadUserData();
-  
-  // NEW: Initialize identity system
-  updateConsecutiveDays();
-  questProgress.chaosCheckTime = millis();
-  USBSerial.println("[IDENTITY] Card Identity System initialized!");
 void syncTimeNTP();
 void fetchWeatherData();
 void fetchCryptoData();
 void updateSensorFusion();
 void calibrateCompass();
+
+// Identity system functions
+void trackStopwatchUse();
+void trackGameWon();
+void trackGameLost();
+void trackGamePlayed();
+void trackDailySteps();
+float getCalibratedHeading();
+void checkIdentityUnlocks();
+void showNotificationPopup();
+void addNotification(const char* message, lv_color_t color);
+void handleSecretTap();
+void updateConsecutiveDays();
 
 // Battery Intelligence
 void updateUsageTracking();
@@ -696,16 +713,16 @@ void createReactionTestCard();
 void createDailyChallengeCard();
 void createFactoryResetCard();
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TOUCH INTERRUPT
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void Arduino_IIC_Touch_Interrupt(void) {
   FT3168->IIC_Interrupt_Flag = true;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  DISPLAY FLUSH
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
@@ -719,9 +736,9 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
 
 void lvgl_tick_cb(void *arg) { lv_tick_inc(LVGL_TICK_PERIOD_MS); }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TOUCHPAD READ WITH SMOOTH GESTURE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
   int32_t touchX = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X);
   int32_t touchY = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y);
@@ -900,9 +917,9 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  SCREEN CONTROL
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void screenOff() {
     if (!screenOn) return;
     
@@ -956,9 +973,9 @@ void shutdownDevice() {
     esp_deep_sleep_start();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  NAVIGATION
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void startTransition(int direction) {
   isTransitioning = true;
   transitionDir = direction;
@@ -1010,40 +1027,82 @@ void handleSwipe(int dx, int dy) {
   int newSubCard = currentSubCard;
   int direction = 0;
   
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // 
   //  NAVIGATION RULES - CARD-BASED, GESTURE-ONLY, INFINITE UI
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // 
   //
   //  HORIZONTAL (Left/Right) = Change Category - INFINITE LOOP
-  //  • ALWAYS works from ANY screen (main or sub-card)
-  //  • Immediately exits sub-cards, resets subIndex to 0
-  //  • No beginning, no end
+  //   ALWAYS works from ANY screen (main or sub-card)
+  //   Immediately exits sub-cards, resets subIndex to 0
+  //   No beginning, no end
   //
   //  VERTICAL (Up/Down) = Navigate Within Category Stack
-  //  • DOWN: go deeper (main→sub1→sub2→...)
-  //  • UP: go back one step (sub2→sub1→main)
-  //  • Bounce at boundaries
+  //   DOWN: go deeper (mainsub1sub2...)
+  //   UP: go back one step (sub2sub1main)
+  //   Bounce at boundaries
   //
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // 
   
   // Determine dominant gesture direction (lock to one axis)
   bool isHorizontal = abs(dx) > abs(dy);
   int threshold = 50;  // Minimum swipe distance
   
   if (isHorizontal && abs(dx) > threshold) {
-    // ══════════════════════════════════════════════════════════════════════════
+    // 
     // HORIZONTAL SWIPE - Category change (INFINITE LOOP)
-    // ══════════════════════════════════════════════════════════════════════════
+    // 
     if (dx > threshold) {
-      // Swipe RIGHT → previous category
+      // Swipe RIGHT  previous category
       newCategory = currentCategory - 1;
       if (newCategory < 0) newCategory = NUM_CATEGORIES - 1;
       direction = -1;
-      USBSerial.printf("[NAV] Swipe RIGHT: Cat %d → %d\\n
+      USBSerial.printf("[NAV] Swipe RIGHT: Cat %d -> %d\n", currentCategory, newCategory);
+    } else if (dx < -threshold) {
+      // Swipe LEFT → next category
+      newCategory = (currentCategory + 1) % NUM_CATEGORIES;
+      direction = 1;
+      USBSerial.printf("[NAV] Swipe LEFT: Cat %d -> %d\n", currentCategory, newCategory);
+    }
+    // CRITICAL: Always reset to main card (subIndex = 0)
+    newSubCard = 0;
+    
+  } else if (!isHorizontal && abs(dy) > threshold) {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VERTICAL SWIPE - Navigate within category stack
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (dy > threshold) {
+      // Swipe DOWN → go deeper
+      if (currentSubCard < maxSubCards[currentCategory] - 1) {
+        newSubCard = currentSubCard + 1;
+        direction = 2;
+        USBSerial.printf("[NAV] Swipe DOWN: Sub %d -> %d\n", currentSubCard, newSubCard);
+      }
+    } else if (dy < -threshold) {
+      // Swipe UP → go back one
+      if (currentSubCard > 0) {
+        newSubCard = currentSubCard - 1;
+        direction = -2;
+        USBSerial.printf("[NAV] Swipe UP: Sub %d -> %d\n", currentSubCard, newSubCard);
+      }
+    }
+    newCategory = currentCategory;
+  }
+  
+  // Execute navigation if valid
+  if (direction != 0 && canNavigate()) {
+    navigationLocked = true;  // Lock during navigation
+    currentCategory = newCategory;
+    currentSubCard = newSubCard;
+    startTransition(direction);
+    navigateTo(currentCategory, currentSubCard);
+    lastNavigationMs = millis();
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  CARD IDENTITY SYSTEM - v5.0
 // ═══════════════════════════════════════════════════════════════════════════════
-#define NUM_IDENTITIES 15
+// NOTE: NUM_IDENTITIES is defined at the top of the file (before UserData struct)
 
 enum CardIdentity {
   IDENTITY_NONE = -1,
@@ -1066,19 +1125,19 @@ struct CardIdentityData {
 };
 
 CardIdentityData cardIdentities[NUM_IDENTITIES] = {
-  {"💣", "Chaos", "Chaos Mode", "Unlocks randomly over time", 
+  {"", "Chaos", "Chaos Mode", "Unlocks randomly over time", 
    lv_color_hex(0xFF453A), lv_color_hex(0xFF9F0A), 0, false, 0},
-  {"👾", "Glitch", "System Glitch", "Tap screen 10x rapidly", 
+  {"", "Glitch", "System Glitch", "Tap screen 10x rapidly", 
    lv_color_hex(0xBF5AF2), lv_color_hex(0xFF2D55), 0, false, 0},
-  {"🧠", "Focus", "Deep Focus", "Maintain 7-day step streak", 
+  {"", "Focus", "Deep Focus", "Maintain 7-day step streak", 
    lv_color_hex(0x5E5CE6), lv_color_hex(0x30D158), 7, false, 0},
-  {"❄", "Frostbite", "Cold as Ice", "Reach 20,000 total steps", 
+  {"", "Frostbite", "Cold as Ice", "Reach 20,000 total steps", 
    lv_color_hex(0x64D2FF), lv_color_hex(0x5AC8FA), 20000, false, 0},
-  {"🥶", "Subzero", "Frozen", "Use device 3 days in a row", 
+  {"", "Subzero", "Frozen", "Use device 3 days in a row", 
    lv_color_hex(0x00C7BE), lv_color_hex(0x32ADE6), 3, false, 0},
-  {"🧊", "Cold", "Ice Cold", "Win 5 Blackjack games", 
+  {"", "Cold", "Ice Cold", "Win 5 Blackjack games", 
    lv_color_hex(0x5AC8FA), lv_color_hex(0x30D158), 5, false, 0},
-  {"🪐", "Orbit", "Orbital", "Use compass 100 times", 
+  {"", "Orbit", "Orbital", "Use compass 100 times", 
    lv_color_hex(0xFF9F0A), lv_color_hex(0xFFD60A), 100, false, 0}
 };
 
@@ -1111,55 +1170,11 @@ struct Notification {
 
 Notification notifications[MAX_NOTIFICATIONS];
 int notificationCount = 0;
-bool showingNotification = false;
-unsigned long notificationStartMs = 0;
-const unsigned long NOTIFICATION_DURATION = 3000;
-n", currentCategory, newCategory);
-    } else if (dx < -threshold) {
-      // Swipe LEFT → next category
-      newCategory = (currentCategory + 1) % NUM_CATEGORIES;
-      direction = 1;
-      USBSerial.printf("[NAV] Swipe LEFT: Cat %d → %d\n", currentCategory, newCategory);
-    }
-    // CRITICAL: Always reset to main card (subIndex = 0)
-    newSubCard = 0;
-    
-  } else if (!isHorizontal && abs(dy) > threshold) {
-    // ══════════════════════════════════════════════════════════════════════════
-    // VERTICAL SWIPE - Navigate within category stack
-    // ══════════════════════════════════════════════════════════════════════════
-    if (dy > threshold) {
-      // Swipe DOWN → go deeper
-      if (currentSubCard < maxSubCards[currentCategory] - 1) {
-        newSubCard = currentSubCard + 1;
-        direction = 2;
-        USBSerial.printf("[NAV] Swipe DOWN: Sub %d → %d\n", currentSubCard, newSubCard);
-      }
-    } else if (dy < -threshold) {
-      // Swipe UP → go back one
-      if (currentSubCard > 0) {
-        newSubCard = currentSubCard - 1;
-        direction = -2;
-        USBSerial.printf("[NAV] Swipe UP: Sub %d → %d\n", currentSubCard, newSubCard);
-      }
-    }
-    newCategory = currentCategory;
-  }
-  
-  // Execute navigation if valid
-  if (direction != 0 && canNavigate()) {
-    navigationLocked = true;  // Lock during navigation
-    currentCategory = newCategory;
-    currentSubCard = newSubCard;
-    startTransition(direction);
-    navigateTo(currentCategory, currentSubCard);
-    lastNavigationMs = millis();
-  }
-}
+// showingNotification, notificationStartMs, NOTIFICATION_DURATION declared earlier
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  BATTERY INTELLIGENCE FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void updateUsageTracking() {
     unsigned long now = millis();
     
@@ -1276,9 +1291,9 @@ void toggleBatterySaver() {
     gfx->setBrightness(batterySaverMode ? 100 : userData.brightness);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  DATA PERSISTENCE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void saveUserData() {
     prefs.begin("minios", false);
     
@@ -1417,9 +1432,9 @@ void factoryReset() {
     ESP.restart();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  SD CARD & WIFI
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 bool loadWiFiFromSD() {
     if (!hasSD) return false;
     
@@ -1515,13 +1530,13 @@ void connectWiFi() {
     wifiConnected = false;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  AUTOMATIC FREE WIFI CONNECTION SYSTEM - Core Functions
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
 // Scan for available networks (both known and open)
 void scanWiFiNetworks() {
-    USBSerial.println("[WIFI] ═══════════════════════════════════════════");
+    USBSerial.println("[WIFI] ");
     USBSerial.println("[WIFI] Starting WiFi network scan...");
     
     WiFi.mode(WIFI_STA);
@@ -1578,7 +1593,7 @@ void scanWiFiNetworks() {
     
     WiFi.scanDelete();
     lastWiFiScan = millis();
-    USBSerial.println("[WIFI] ═══════════════════════════════════════════");
+    USBSerial.println("[WIFI] ");
 }
 
 // Try to connect to a known/configured network
@@ -1628,12 +1643,12 @@ bool connectToKnownNetworks() {
             wifiConnected = true;
             connectedNetworkIndex = i;
             connectedToOpenNetwork = false;
-            USBSerial.printf("[WIFI] ✓ Connected to known network: %s\n", wifiNetworks[i].ssid);
+            USBSerial.printf("[WIFI]  Connected to known network: %s\n", wifiNetworks[i].ssid);
             USBSerial.printf("[WIFI] IP Address: %s\n", WiFi.localIP().toString().c_str());
             WiFi.scanDelete();
             return true;
         } else {
-            USBSerial.printf("[WIFI] ✗ Failed to connect to: %s\n", wifiNetworks[i].ssid);
+            USBSerial.printf("[WIFI]  Failed to connect to: %s\n", wifiNetworks[i].ssid);
             WiFi.disconnect();
             delay(100);
         }
@@ -1650,7 +1665,7 @@ bool connectToOpenNetworks() {
         return false;
     }
     
-    USBSerial.println("[WIFI] ═══════════════════════════════════════════");
+    USBSerial.println("[WIFI] ");
     USBSerial.println("[WIFI] Attempting to connect to FREE open networks...");
     
     for (int i = 0; i < numOpenNetworks; i++) {
@@ -1664,7 +1679,7 @@ bool connectToOpenNetworks() {
         unsigned long startTime = millis();
         while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < WIFI_CONNECT_TIMEOUT_MS) {
             delay(250);
-            USBSerial.print("•");
+            USBSerial.print("");
         }
         USBSerial.println();
         
@@ -1677,27 +1692,27 @@ bool connectToOpenNetworks() {
             strncpy(wifiNetworks[0].ssid, openNetworks[i].ssid, 63);
             wifiNetworks[0].isOpen = true;
             
-            USBSerial.printf("[WIFI] ✓ Connected to FREE network: %s\n", openNetworks[i].ssid);
+            USBSerial.printf("[WIFI]  Connected to FREE network: %s\n", openNetworks[i].ssid);
             USBSerial.printf("[WIFI] IP Address: %s\n", WiFi.localIP().toString().c_str());
-            USBSerial.println("[WIFI] ═══════════════════════════════════════════");
+            USBSerial.println("[WIFI] ");
             return true;
         } else {
-            USBSerial.printf("[WIFI] ✗ Failed to connect to open network: %s\n", openNetworks[i].ssid);
+            USBSerial.printf("[WIFI]  Failed to connect to open network: %s\n", openNetworks[i].ssid);
             WiFi.disconnect();
             delay(100);
         }
     }
     
-    USBSerial.println("[WIFI] ✗ Could not connect to any open network");
-    USBSerial.println("[WIFI] ═══════════════════════════════════════════");
+    USBSerial.println("[WIFI]  Could not connect to any open network");
+    USBSerial.println("[WIFI] ");
     return false;
 }
 
 // Smart WiFi connection - tries known networks first, then scans for open ones
 void smartWiFiConnect() {
-    USBSerial.println("\n[WIFI] ══════════════════════════════════════════════════");
+    USBSerial.println("\n[WIFI] ");
     USBSerial.println("[WIFI]  AUTOMATIC FREE WIFI CONNECTION SYSTEM");
-    USBSerial.println("[WIFI] ══════════════════════════════════════════════════");
+    USBSerial.println("[WIFI] ");
     
     WiFi.mode(WIFI_STA);
     
@@ -1718,7 +1733,7 @@ void smartWiFiConnect() {
     }
     
     // STEP 4: No connection possible
-    USBSerial.println("[WIFI] ✗ No suitable WiFi networks found");
+    USBSerial.println("[WIFI]  No suitable WiFi networks found");
     USBSerial.println("[WIFI] Will retry periodically in background");
     wifiConnected = false;
     connectedNetworkIndex = -1;
@@ -1744,7 +1759,7 @@ void checkWiFiConnection() {
     
     // Connection lost - attempt reconnect
     if (wifiConnected) {
-        USBSerial.println("[WIFI] ⚠ Connection lost! Attempting to reconnect...");
+        USBSerial.println("[WIFI]  Connection lost! Attempting to reconnect...");
         wifiConnected = false;
         connectedNetworkIndex = -1;
         connectedToOpenNetwork = false;
@@ -1803,9 +1818,9 @@ void fetchCryptoData() {
     http.end();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  SENSOR FUSION
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void updateSensorFusion() {
     if (!hasIMU) return;
     
@@ -1854,9 +1869,9 @@ void calibrateCompass() {
     compassCalibrated = true;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  UI HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createGradientBg() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_set_style_bg_color(lv_scr_act(), theme.color1, 0);
@@ -2010,9 +2025,9 @@ void createMiniStatusBar(lv_obj_t* parent) {
     lv_obj_align(battLabel, LV_ALIGN_RIGHT_MID, -8, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  LOW BATTERY POPUP
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void drawLowBatteryPopup() {
     if (!showingLowBatteryPopup) return;
     
@@ -2057,18 +2072,14 @@ void drawLowBatteryPopup() {
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -20);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  MAIN NAVIGATION - SAFE VERSION
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void navigateTo(int category, int subCard) {
     // SAFETY: Validate bounds first
     if (category < 0 || category >= NUM_CATEGORIES) {
         category = CAT_CLOCK;
-    
-  
-  // Check for identity unlocks
-  checkIdentityUnlocks();
-}
+    }
     if (subCard < 0 || subCard >= maxSubCards[category]) {
         subCard = 0;
     }
@@ -2084,17 +2095,20 @@ void navigateTo(int category, int subCard) {
     // Update usage tracking
     updateUsageTracking();
     
+    // Track compass usage for Orbit identity
+    if (category == CAT_COMPASS) {
+        userData.compassUseCount++;
+    }
+    
+    // Check for identity unlocks
+    checkIdentityUnlocks();
+    
     switch (category) {
         case CAT_CLOCK:
             if (subCard == 0) createClockCard();
             else createAnalogClockCard();
             break;
-        // Track compass usage for 🪐 Orbit
-  if (category == CAT_COMPASS) {
-    userData.compassUseCount++;
-  }
-  
-  case CAT_COMPASS:
+        case CAT_COMPASS:
             if (subCard == 0) createCompassCard();
             else if (subCard == 1) createTiltCard();
             else createGyroCard();
@@ -2172,24 +2186,27 @@ void navigateTo(int category, int subCard) {
 // Due to file size limits, the card creation functions are in Part 2
 // Include S3_MiniOS_Part2.ino in the same folder
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  S3 MiniOS v4.0 - PART 2: Card UI Functions
 //  Place this file in the same folder as S3_MiniOS.ino
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  PREMIUM CLOCK CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createClockCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
+    // Main card container
     lv_obj_t *card = lv_obj_create(lv_scr_act());
     lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
     lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
     lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_set_scrollbar_mode(card, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     
-    // Time display
+    // Time display - centered and prominent
     RTC_DateTime dt = rtc.getDateTime();
     char timeBuf[10];
     snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", dt.getHour(), dt.getMinute());
@@ -2198,26 +2215,26 @@ void createClockCard() {
     lv_label_set_text(clockLabel, timeBuf);
     lv_obj_set_style_text_color(clockLabel, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(clockLabel, &lv_font_montserrat_48, 0);
-    lv_obj_align(clockLabel, LV_ALIGN_CENTER, 0, -60);
+    lv_obj_align(clockLabel, LV_ALIGN_TOP_MID, -15, 40);
     
-    // Seconds
+    // Seconds - positioned to the right of time
     char secBuf[8];
     snprintf(secBuf, sizeof(secBuf), ":%02d", dt.getSecond());
     lv_obj_t *secLabel = lv_label_create(card);
     lv_label_set_text(secLabel, secBuf);
     lv_obj_set_style_text_color(secLabel, theme.accent, 0);
-    lv_obj_set_style_text_font(secLabel, &lv_font_montserrat_24, 0);
-    lv_obj_align(secLabel, LV_ALIGN_CENTER, 85, -55);
+    lv_obj_set_style_text_font(secLabel, &lv_font_montserrat_20, 0);
+    lv_obj_align_to(secLabel, clockLabel, LV_ALIGN_OUT_RIGHT_BOTTOM, 5, -5);
     
-    // Day name
+    // Day name - below time with spacing
     const char* dayNames[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
     lv_obj_t *dayLabel = lv_label_create(card);
     lv_label_set_text(dayLabel, dayNames[dt.getWeek()]);
     lv_obj_set_style_text_color(dayLabel, lv_color_hex(0x8E8E93), 0);
     lv_obj_set_style_text_font(dayLabel, &lv_font_montserrat_18, 0);
-    lv_obj_align(dayLabel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(dayLabel, LV_ALIGN_TOP_MID, 0, 110);
     
-    // Full date
+    // Full date - below day name
     char dateBuf[32];
     const char* monthNames[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     snprintf(dateBuf, sizeof(dateBuf), "%s %d, %d", monthNames[dt.getMonth()-1], dt.getDay(), dt.getYear());
@@ -2225,23 +2242,31 @@ void createClockCard() {
     lv_label_set_text(dateLabel, dateBuf);
     lv_obj_set_style_text_color(dateLabel, theme.accent, 0);
     lv_obj_set_style_text_font(dateLabel, &lv_font_montserrat_16, 0);
-    lv_obj_align(dateLabel, LV_ALIGN_CENTER, 0, 30);
+    lv_obj_align(dateLabel, LV_ALIGN_TOP_MID, 0, 140);
     
-    // Status bar with battery estimate
+    // Status bar container - at bottom with proper spacing
     lv_obj_t *statusBar = lv_obj_create(card);
-    lv_obj_set_size(statusBar, LCD_WIDTH - 60, 50);
-    lv_obj_align(statusBar, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_set_style_bg_color(statusBar, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(statusBar, LV_OPA_50, 0);
-    lv_obj_set_style_radius(statusBar, 25, 0);
+    lv_obj_set_size(statusBar, LCD_WIDTH - 50, 55);
+    lv_obj_align(statusBar, LV_ALIGN_BOTTOM_MID, 0, -5);
+    lv_obj_set_style_bg_color(statusBar, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_bg_opa(statusBar, LV_OPA_80, 0);
+    lv_obj_set_style_radius(statusBar, 28, 0);
     lv_obj_set_style_border_width(statusBar, 0, 0);
-    lv_obj_set_flex_flow(statusBar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(statusBar, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_left(statusBar, 15, 0);
+    lv_obj_set_style_pad_right(statusBar, 15, 0);
+    lv_obj_set_scrollbar_mode(statusBar, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(statusBar, LV_OBJ_FLAG_SCROLLABLE);
     
-    // WiFi
+    // Calculate positions for 4 status items
+    int itemWidth = (LCD_WIDTH - 80) / 4;
+    int startX = 10;
+    
+    // WiFi indicator
     lv_obj_t *wifiIcon = lv_label_create(statusBar);
     lv_label_set_text(wifiIcon, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_color(wifiIcon, wifiConnected ? lv_color_hex(0x30D158) : lv_color_hex(0xFF453A), 0);
+    lv_obj_set_style_text_font(wifiIcon, &lv_font_montserrat_16, 0);
+    lv_obj_align(wifiIcon, LV_ALIGN_LEFT_MID, startX, 0);
     
     // Battery estimate
     calculateBatteryEstimates();
@@ -2254,25 +2279,31 @@ void createClockCard() {
     lv_obj_t *estLabel = lv_label_create(statusBar);
     lv_label_set_text(estLabel, estBuf);
     lv_obj_set_style_text_color(estLabel, isCharging ? lv_color_hex(0x30D158) : lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_text_font(estLabel, &lv_font_montserrat_14, 0);
+    lv_obj_align(estLabel, LV_ALIGN_LEFT_MID, startX + itemWidth, 0);
     
-    // Battery
+    // Battery percentage
     char battBuf[8];
     snprintf(battBuf, sizeof(battBuf), "%d%%", batteryPercent);
     lv_obj_t *battLabel = lv_label_create(statusBar);
     lv_label_set_text(battLabel, battBuf);
     lv_obj_set_style_text_color(battLabel, batteryPercent > 20 ? lv_color_hex(0x30D158) : lv_color_hex(0xFF453A), 0);
+    lv_obj_set_style_text_font(battLabel, &lv_font_montserrat_14, 0);
+    lv_obj_align(battLabel, LV_ALIGN_LEFT_MID, startX + itemWidth * 2, 0);
     
-    // Steps
+    // Steps count
     char stepBuf[16];
     snprintf(stepBuf, sizeof(stepBuf), "%lu", (unsigned long)userData.steps);
     lv_obj_t *stepLabel = lv_label_create(statusBar);
     lv_label_set_text(stepLabel, stepBuf);
     lv_obj_set_style_text_color(stepLabel, theme.accent, 0);
+    lv_obj_set_style_text_font(stepLabel, &lv_font_montserrat_14, 0);
+    lv_obj_align(stepLabel, LV_ALIGN_RIGHT_MID, -10, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  ANALOG CLOCK CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createAnalogClockCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_t *card = createCard("");
@@ -2334,9 +2365,9 @@ void createAnalogClockCard() {
     // Mini status bar removed - user preference
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  COMPASS CARD - Apple Watch Style with Sunrise/Sunset
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createCompassCard() {
     // PREMIUM: Compass + Sunrise/Sunset - Ultra polished design
     lv_obj_clean(lv_scr_act());
@@ -2420,7 +2451,7 @@ void createCompassCard() {
         lv_obj_set_size(sunriseBox, 140, 65);
         lv_obj_align(sunriseBox, LV_ALIGN_CENTER, 0, -90);
         lv_obj_set_style_bg_color(sunriseBox, lv_color_hex(0x52B2CF), 0);
-        lv_obj_set_style_bg_opa(sunriseBox, LV_OPA_15, 0);
+        lv_obj_set_style_bg_opa(sunriseBox, LV_OPA_10, 0);
         lv_obj_set_style_radius(sunriseBox, 16, 0);
         lv_obj_set_style_border_width(sunriseBox, 2, 0);
         lv_obj_set_style_border_color(sunriseBox, lv_color_hex(0x52B2CF), 0);
@@ -2443,7 +2474,7 @@ void createCompassCard() {
         lv_obj_set_size(sunsetBox, 140, 65);
         lv_obj_align(sunsetBox, LV_ALIGN_CENTER, 0, 55);
         lv_obj_set_style_bg_color(sunsetBox, lv_color_hex(0xFF6B35), 0);
-        lv_obj_set_style_bg_opa(sunsetBox, LV_OPA_15, 0);
+        lv_obj_set_style_bg_opa(sunsetBox, LV_OPA_10, 0);
         lv_obj_set_style_radius(sunsetBox, 16, 0);
         lv_obj_set_style_border_width(sunsetBox, 2, 0);
         lv_obj_set_style_border_color(sunsetBox, lv_color_hex(0xFF6B35), 0);
@@ -2548,12 +2579,11 @@ void createCompassCard() {
 
     lv_obj_t *headingLabel = lv_label_create(headingBadge);
     char headingStr[16];
-    snprintf(headingStr, sizeof(headingStr), "%.0f°", getCalibratedHeading());
+    snprintf(headingStr, sizeof(headingStr), "%.0f", getCalibratedHeading());
     lv_label_set_text(headingLabel, headingStr);
     lv_obj_set_style_text_color(headingLabel, lv_color_hex(0x0A84FF), 0);
     lv_obj_set_style_text_font(headingLabel, &lv_font_montserrat_16, 0);
     lv_obj_center(headingLabel);
-}
 
     // Cardinal directions
     lv_obj_t *north = lv_label_create(card);
@@ -2634,167 +2664,11 @@ void createCompassCard() {
         lv_obj_set_style_line_width(sunsetHand, 4, 0);
         lv_obj_set_style_line_color(sunsetHand, lv_color_hex(0xFF3B30), 0);  // Red
     }
-
-    // Central pivot (white circle)
-    lv_obj_t *pivot = lv_obj_create(card);
-    lv_obj_set_size(pivot, 16, 16);
-    lv_obj_align(pivot, LV_ALIGN_CENTER, 0, -20);
-    lv_obj_set_style_radius(pivot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(pivot, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_border_width(pivot, 0, 0);
-
-    // "Set North" calibration button
-    lv_obj_t *calibBtn = lv_obj_create(card);
-    lv_obj_set_size(calibBtn, 140, 40);
-    lv_obj_align(calibBtn, LV_ALIGN_BOTTOM_MID, 0, -15);
-    lv_obj_set_style_bg_color(calibBtn, lv_color_hex(0x0A84FF), 0);
-    lv_obj_set_style_radius(calibBtn, 20, 0);
-
-    lv_obj_t *btnLabel = lv_label_create(calibBtn);
-    lv_label_set_text(btnLabel, "Set North");
-    lv_obj_set_style_text_color(btnLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(btnLabel, &lv_font_montserrat_14, 0);
-    lv_obj_center(btnLabel);
-
-    // Heading display
-    lv_obj_t *headingLabel = lv_label_create(card);
-    char headingStr[16];
-    snprintf(headingStr, sizeof(headingStr), "%.0f°", getCalibratedHeading());
-    lv_label_set_text(headingLabel, headingStr);
-    lv_obj_set_style_text_color(headingLabel, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(headingLabel, &lv_font_montserrat_12, 0);
-    lv_obj_align(headingLabel, LV_ALIGN_TOP_MID, 0, 10);
-}
-    
-    // Cardinal directions - N/E/S/W positioned around the compass
-    // North - RED and prominent (at top when facing north)
-    float nAngle = (0 - compassHeadingSmooth) * 3.14159 / 180.0;
-    int nX = (int)(sin(nAngle) * 115);
-    int nY = (int)(-cos(nAngle) * 115);
-    lv_obj_t *northLbl = lv_label_create(compassBg);
-    lv_label_set_text(northLbl, "N");
-    lv_obj_set_style_text_color(northLbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(northLbl, &lv_font_montserrat_28, 0);
-    lv_obj_align(northLbl, LV_ALIGN_CENTER, nX, nY);
-    
-    // East
-    float eAngle = (90 - compassHeadingSmooth) * 3.14159 / 180.0;
-    int eX = (int)(sin(eAngle) * 115);
-    int eY = (int)(-cos(eAngle) * 115);
-    lv_obj_t *eastLbl = lv_label_create(compassBg);
-    lv_label_set_text(eastLbl, "E");
-    lv_obj_set_style_text_color(eastLbl, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(eastLbl, &lv_font_montserrat_24, 0);
-    lv_obj_align(eastLbl, LV_ALIGN_CENTER, eX, eY);
-    
-    // South
-    float sAngle = (180 - compassHeadingSmooth) * 3.14159 / 180.0;
-    int sX = (int)(sin(sAngle) * 115);
-    int sY = (int)(-cos(sAngle) * 115);
-    lv_obj_t *southLbl = lv_label_create(compassBg);
-    lv_label_set_text(southLbl, "S");
-    lv_obj_set_style_text_color(southLbl, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(southLbl, &lv_font_montserrat_24, 0);
-    lv_obj_align(southLbl, LV_ALIGN_CENTER, sX, sY);
-    
-    // West
-    float wAngle = (270 - compassHeadingSmooth) * 3.14159 / 180.0;
-    int wX = (int)(sin(wAngle) * 115);
-    int wY = (int)(-cos(wAngle) * 115);
-    lv_obj_t *westLbl = lv_label_create(compassBg);
-    lv_label_set_text(westLbl, "W");
-    lv_obj_set_style_text_color(westLbl, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(westLbl, &lv_font_montserrat_24, 0);
-    lv_obj_align(westLbl, LV_ALIGN_CENTER, wX, wY);
-    
-    // ═══ SUNRISE DISPLAY (top) ═══
-    lv_obj_t *sunriseLabel = lv_label_create(compassBg);
-    lv_label_set_text(sunriseLabel, "SUNRISE");
-    lv_obj_set_style_text_color(sunriseLabel, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(sunriseLabel, &lv_font_montserrat_10, 0);
-    lv_obj_align(sunriseLabel, LV_ALIGN_CENTER, 0, -70);
-    
-    // Sunrise time - gradient yellow/orange text
-    lv_obj_t *sunriseTime = lv_label_create(compassBg);
-    lv_label_set_text(sunriseTime, "05:39");  // Would be calculated from location
-    lv_obj_set_style_text_color(sunriseTime, lv_color_hex(0xFFD60A), 0);  // Golden yellow
-    lv_obj_set_style_text_font(sunriseTime, &lv_font_montserrat_28, 0);
-    lv_obj_align(sunriseTime, LV_ALIGN_CENTER, 0, -45);
-    
-    // ═══ COMPASS NEEDLE - Red (North) and Blue (South) ═══
-    // Red needle pointing UP (North indicator)
-    lv_obj_t *needleRed = lv_obj_create(compassBg);
-    lv_obj_set_size(needleRed, 8, 55);
-    lv_obj_align(needleRed, LV_ALIGN_CENTER, 0, -28);
-    lv_obj_set_style_bg_color(needleRed, lv_color_hex(0xFF3B30), 0);
-    lv_obj_set_style_radius(needleRed, 4, 0);
-    lv_obj_set_style_border_width(needleRed, 0, 0);
-    lv_obj_set_style_shadow_width(needleRed, 8, 0);
-    lv_obj_set_style_shadow_color(needleRed, lv_color_hex(0xFF3B30), 0);
-    lv_obj_set_style_shadow_opa(needleRed, LV_OPA_60, 0);
-    
-    // Blue needle pointing DOWN (South indicator)
-    lv_obj_t *needleBlue = lv_obj_create(compassBg);
-    lv_obj_set_size(needleBlue, 8, 55);
-    lv_obj_align(needleBlue, LV_ALIGN_CENTER, 0, 28);
-    lv_obj_set_style_bg_color(needleBlue, lv_color_hex(0x007AFF), 0);
-    lv_obj_set_style_radius(needleBlue, 4, 0);
-    lv_obj_set_style_border_width(needleBlue, 0, 0);
-    lv_obj_set_style_shadow_width(needleBlue, 8, 0);
-    lv_obj_set_style_shadow_color(needleBlue, lv_color_hex(0x007AFF), 0);
-    lv_obj_set_style_shadow_opa(needleBlue, LV_OPA_60, 0);
-    
-    // Center pivot - white dot
-    lv_obj_t *pivot = lv_obj_create(compassBg);
-    lv_obj_set_size(pivot, 20, 20);
-    lv_obj_align(pivot, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(pivot, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_radius(pivot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(pivot, 0, 0);
-    lv_obj_set_style_shadow_width(pivot, 10, 0);
-    lv_obj_set_style_shadow_color(pivot, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_shadow_opa(pivot, LV_OPA_30, 0);
-    
-    // ═══ SUNSET DISPLAY (bottom) ═══
-    lv_obj_t *sunsetTime = lv_label_create(compassBg);
-    lv_label_set_text(sunsetTime, "19:05");  // Would be calculated from location
-    lv_obj_set_style_text_color(sunsetTime, lv_color_hex(0xFF9500), 0);  // Orange
-    lv_obj_set_style_text_font(sunsetTime, &lv_font_montserrat_28, 0);
-    lv_obj_align(sunsetTime, LV_ALIGN_CENTER, 0, 45);
-    
-    lv_obj_t *sunsetLabel = lv_label_create(compassBg);
-    lv_label_set_text(sunsetLabel, "SUNSET");
-    lv_obj_set_style_text_color(sunsetLabel, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(sunsetLabel, &lv_font_montserrat_10, 0);
-    lv_obj_align(sunsetLabel, LV_ALIGN_CENTER, 0, 70);
-    
-    // Current heading display at bottom of card
-    int headingInt = (int)compassHeadingSmooth;
-    if (headingInt < 0) headingInt += 360;
-    
-    // Direction name based on heading
-    const char* dirName = "N";
-    if (headingInt >= 337 || headingInt < 23) dirName = "N";
-    else if (headingInt >= 23 && headingInt < 67) dirName = "NE";
-    else if (headingInt >= 67 && headingInt < 113) dirName = "E";
-    else if (headingInt >= 113 && headingInt < 157) dirName = "SE";
-    else if (headingInt >= 157 && headingInt < 203) dirName = "S";
-    else if (headingInt >= 203 && headingInt < 247) dirName = "SW";
-    else if (headingInt >= 247 && headingInt < 293) dirName = "W";
-    else dirName = "NW";
-    
-    char headingBuf[24];
-    snprintf(headingBuf, sizeof(headingBuf), "%d° %s", headingInt, dirName);
-    lv_obj_t *headingLbl = lv_label_create(card);
-    lv_label_set_text(headingLbl, headingBuf);
-    lv_obj_set_style_text_color(headingLbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(headingLbl, &lv_font_montserrat_18, 0);
-    lv_obj_align(headingLbl, LV_ALIGN_BOTTOM_MID, 0, -15);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TILT/LEVEL CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createTiltCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
@@ -2875,9 +2749,9 @@ void createTiltCard() {
     // Mini status bar removed - user preference
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  GYRO ROTATION CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createGyroCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_t *card = createCard("ROTATION");
@@ -2939,7 +2813,7 @@ void createGyroCard() {
     
     for (int i = 0; i < 3; i++) {
         char buf[24];
-        snprintf(buf, sizeof(buf), "%s: %.0f°", labels[i], values[i]);
+        snprintf(buf, sizeof(buf), "%s: %.0f", labels[i], values[i]);
         lv_obj_t *lbl = lv_label_create(card);
         lv_label_set_text(lbl, buf);
         lv_obj_set_style_text_color(lbl, colors[i], 0);
@@ -2950,9 +2824,9 @@ void createGyroCard() {
     // Mini status bar removed - user preference
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  STEPS CARD (Premium)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createStepsCard() {
     // Beautiful gradient card - Purple to Blue (like USBO App reference)
     lv_obj_t *card = lv_obj_create(lv_scr_act());
@@ -3087,9 +2961,9 @@ void createStepsCard() {
     lv_obj_set_style_border_width(posLine, 0, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  ACTIVITY RINGS CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createActivityRingsCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_t *card = createCard("ACTIVITY RINGS");
@@ -3172,9 +3046,9 @@ void createActivityRingsCard() {
     // Mini status bar removed - user preference
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  WORKOUT & DISTANCE CARDS (Placeholders)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createWorkoutCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_t *card = createCard("WORKOUT");
@@ -3216,14 +3090,14 @@ void createDistanceCard() {
 }
 
 // Continue in Part 3...
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  S3 MiniOS v4.0 - PART 3: Games, Weather, Media, Timer Cards
 //  Place this file in the same folder as S3_MiniOS.ino
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  BLACKJACK CARD (Premium)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 int cardValue(int c) {
     int v = c % 13 + 1;
     if (v > 10) return 10;
@@ -3484,9 +3358,9 @@ void blackjackStandCb(lv_event_t *e) {
     navigateTo(CAT_GAMES, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  DINO GAME CARD - Pixel Art Style (like reference image)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void dinoJumpCb(lv_event_t *e);
 
 void createDinoCard() {
@@ -3697,9 +3571,9 @@ void dinoJumpCb(lv_event_t *e) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  YES/NO SPINNER CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void yesNoSpinCb(lv_event_t *e);
 
 void createYesNoCard() {
@@ -3756,9 +3630,9 @@ void yesNoSpinCb(lv_event_t *e) {
     navigateTo(CAT_GAMES, 2);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  WEATHER CARD - Apple Watch Inspired Design
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createWeatherCard() {
     // PREMIUM: Berlin-style minimalist weather with enhanced visuals
     lv_obj_clean(lv_scr_act());
@@ -3783,7 +3657,7 @@ void createWeatherCard() {
     // Large temperature with shadow effect
     lv_obj_t *tempLabel = lv_label_create(card);
     char tempStr[16];
-    snprintf(tempStr, sizeof(tempStr), "%.0f°", weatherTemp);
+    snprintf(tempStr, sizeof(tempStr), "%.0f", weatherTemp);
     lv_label_set_text(tempLabel, tempStr);
     lv_obj_set_style_text_color(tempLabel, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(tempLabel, &lv_font_montserrat_48, 0);
@@ -3826,7 +3700,7 @@ void createWeatherCard() {
 
     lv_obj_t *rangeLabel = lv_label_create(rangeContainer);
     char rangeStr[32];
-    snprintf(rangeStr, sizeof(rangeStr), "H: %.0f°  L: %.0f°", weatherHigh, weatherLow);
+    snprintf(rangeStr, sizeof(rangeStr), "H: %.0f  L: %.0f", weatherHigh, weatherLow);
     lv_label_set_text(rangeLabel, rangeStr);
     lv_obj_set_style_text_color(rangeLabel, lv_color_hex(0xE0E0E0), 0);
     lv_obj_set_style_text_font(rangeLabel, &lv_font_montserrat_16, 0);
@@ -3844,7 +3718,7 @@ void createWeatherCard() {
     lv_obj_set_style_border_opa(iconContainer, LV_OPA_50, 0);
 
     lv_obj_t *icon = lv_label_create(iconContainer);
-    const char* iconSymbol = LV_SYMBOL_CLOUD;
+    const char* iconSymbol = LV_SYMBOL_DOWNLOAD;  // Cloud-like icon
     if (weatherDesc.indexOf("Clear") >= 0 || weatherDesc.indexOf("Sunny") >= 0) {
         iconSymbol = LV_SYMBOL_GPS;
         lv_obj_set_style_bg_color(iconContainer, lv_color_hex(0xFFD60A), 0);
@@ -3879,50 +3753,6 @@ void createWeatherCard() {
     lv_obj_set_style_text_color(hint, lv_color_hex(0x8E8E93), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
     lv_obj_center(hint);
-} else if (weatherDesc.indexOf("Rain") >= 0) {
-        iconSymbol = LV_SYMBOL_REFRESH;  // Using refresh as rain
-    }
-    lv_label_set_text(icon, iconSymbol);
-    lv_obj_set_style_text_color(icon, lv_color_hex(0x0A84FF), 0);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_32, 0);
-    lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 24, 190);
-
-    // Weather description
-    lv_obj_t *descLabel = lv_label_create(card);
-    lv_label_set_text(descLabel, weatherDesc.c_str());
-    lv_obj_set_style_text_color(descLabel, lv_color_hex(0xAAAAAA), 0);
-    lv_obj_set_style_text_font(descLabel, &lv_font_montserrat_14, 0);
-    lv_obj_align(descLabel, LV_ALIGN_TOP_LEFT, 80, 202);
-
-    // Swipe hint
-    lv_obj_t *hint = lv_label_create(card);
-    lv_label_set_text(hint, "Swipe for Weather Hero >");
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x636366), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_10, 0);
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
-};
-    int temps[] = {(int)weatherHigh, (int)weatherTemp, (int)weatherLow};
-    
-    for (int i = 0; i < 3; i++) {
-        int xPos = -90 + (i * 90);
-        
-        // Day label
-        lv_obj_t *dayLbl = lv_label_create(forecastRow);
-        lv_label_set_text(dayLbl, days[i]);
-        lv_obj_set_style_text_color(dayLbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_opa(dayLbl, LV_OPA_70, 0);
-        lv_obj_set_style_text_font(dayLbl, &lv_font_montserrat_12, 0);
-        lv_obj_align(dayLbl, LV_ALIGN_TOP_MID, xPos, 12);
-        
-        // Temp
-        char tBuf[8];
-        snprintf(tBuf, sizeof(tBuf), "%d°", temps[i]);
-        lv_obj_t *tLbl = lv_label_create(forecastRow);
-        lv_label_set_text(tLbl, tBuf);
-        lv_obj_set_style_text_color(tLbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(tLbl, &lv_font_montserrat_24, 0);
-        lv_obj_align(tLbl, LV_ALIGN_BOTTOM_MID, xPos, -12);
-    }
 }
 
 void createForecastCard() {
@@ -3977,7 +3807,7 @@ void createForecastCard() {
     // Large temperature with glow
     lv_obj_t *tempLabel = lv_label_create(tempContainer);
     char tempStr[16];
-    snprintf(tempStr, sizeof(tempStr), "%.0f°", weatherTemp);
+    snprintf(tempStr, sizeof(tempStr), "%.0f", weatherTemp);
     lv_label_set_text(tempLabel, tempStr);
     lv_obj_set_style_text_color(tempLabel, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(tempLabel, &lv_font_montserrat_48, 0);
@@ -4053,62 +3883,17 @@ void createForecastCard() {
 
     lv_obj_t *rangeLabel = lv_label_create(rangeContainer);
     char rangeStr[32];
-    snprintf(rangeStr, sizeof(rangeStr), LV_SYMBOL_UP " %.0f°    " LV_SYMBOL_DOWN " %.0f°", weatherHigh, weatherLow);
+    snprintf(rangeStr, sizeof(rangeStr), LV_SYMBOL_UP " %.0f    " LV_SYMBOL_DOWN " %.0f", weatherHigh, weatherLow);
     lv_label_set_text(rangeLabel, rangeStr);
     lv_obj_set_style_text_color(rangeLabel, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(rangeLabel, &lv_font_montserrat_18, 0);
     lv_obj_center(rangeLabel);
 }
 
-    // High/Low at bottom
-    lv_obj_t *rangeLabel = lv_label_create(card);
-    char rangeStr[32];
-    snprintf(rangeStr, sizeof(rangeStr), "↑%.0f°  ↓%.0f°", weatherHigh, weatherLow);
-    lv_label_set_text(rangeLabel, rangeStr);
-    lv_obj_set_style_text_color(rangeLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(rangeLabel, &lv_font_montserrat_16, 0);
-    lv_obj_align(rangeLabel, LV_ALIGN_BOTTOM_MID, 0, -40);
 
-    // Atmospheric effect - semi-transparent overlay
-    lv_obj_t *overlay = lv_obj_create(card);
-    lv_obj_set_size(overlay, LCD_WIDTH, 100);
-    lv_obj_align(overlay, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(overlay, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(overlay, LV_OPA_20, 0);
-    lv_obj_set_style_border_width(overlay, 0, 0);
-    lv_obj_set_style_radius(overlay, 0, 0);
-};
-    int temps[] = {24, 26, 23};
-    
-    for (int i = 0; i < 3; i++) {
-        lv_obj_t *row = lv_obj_create(card);
-        lv_obj_set_size(row, LCD_WIDTH - 70, 70);
-        lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 35 + i * 80);
-        lv_obj_set_style_bg_color(row, lv_color_hex(0x2C2C2E), 0);
-        lv_obj_set_style_radius(row, 16, 0);
-        lv_obj_set_style_border_width(row, 0, 0);
-        
-        lv_obj_t *dayLbl = lv_label_create(row);
-        lv_label_set_text(dayLbl, days[i]);
-        lv_obj_set_style_text_color(dayLbl, theme.text, 0);
-        lv_obj_set_style_text_font(dayLbl, &lv_font_montserrat_16, 0);
-        lv_obj_align(dayLbl, LV_ALIGN_LEFT_MID, 15, 0);
-        
-        char tBuf[8];
-        snprintf(tBuf, sizeof(tBuf), "%d°", temps[i]);
-        lv_obj_t *tLbl = lv_label_create(row);
-        lv_label_set_text(tLbl, tBuf);
-        lv_obj_set_style_text_color(tLbl, theme.accent, 0);
-        lv_obj_set_style_text_font(tLbl, &lv_font_montserrat_24, 0);
-        lv_obj_align(tLbl, LV_ALIGN_RIGHT_MID, -15, 0);
-    }
-    
-    // Mini status bar removed
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  STOCKS & CRYPTO CARDS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createStocksCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_t *card = createCard("STOCKS");
@@ -4190,9 +3975,9 @@ void createCryptoCard() {
     // Mini status bar removed
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  MUSIC & GALLERY CARDS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void musicPlayCb(lv_event_t *e);
 
 void createMusicCard() {
@@ -4293,14 +4078,14 @@ void createGalleryCard() {
 }
 
 // Continue in Part 4...
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  S3 MiniOS v4.0 - PART 4: Timer, Streak, Calendar, System, Battery Stats Cards
 //  Place this file in the same folder as S3_MiniOS.ino
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TIMER CARDS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void sandTimerStartCb(lv_event_t *e);
 void stopwatchToggleCb(lv_event_t *e);
 void stopwatchResetCb(lv_event_t *e);
@@ -4519,9 +4304,9 @@ void breatheStartCb(lv_event_t *e) {
     navigateTo(CAT_TIMER, 3);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  STREAK & ACHIEVEMENTS CARDS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createStepStreakCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_t *card = createCard("STEP STREAK");
@@ -4642,9 +4427,9 @@ void createAchievementsCard() {
     // Mini status bar removed
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  CALENDAR CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createCalendarCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_t *card = createCard("");
@@ -4701,9 +4486,9 @@ void createCalendarCard() {
     createMiniStatusBar(card);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  SETTINGS CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void themeChangeCb(lv_event_t *e);
 void brightnessChangeCb(lv_event_t *e);
 
@@ -4796,9 +4581,9 @@ void brightnessChangeCb(lv_event_t *e) {
     if (!batterySaverMode) gfx->setBrightness(userData.brightness);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  BATTERY CARD (Main System Screen)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void batterySaverToggleCb(lv_event_t *e);
 
 void createBatteryCard() {
@@ -4937,9 +4722,9 @@ void batterySaverToggleCb(lv_event_t *e) {
     navigateTo(CAT_SYSTEM, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  BATTERY STATS SUB-CARD (24h graphs, estimates)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createBatteryStatsCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_t *card = createCard("BATTERY STATS");
@@ -5053,9 +4838,9 @@ void createBatteryStatsCard() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  USAGE PATTERNS SUB-CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createUsagePatternsCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     lv_obj_t *card = createCard("USAGE PATTERNS");
@@ -5183,18 +4968,18 @@ void factoryResetCb(lv_event_t *e) {
     factoryReset();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  Continue to Part 5 (Setup & Loop)...
-// ═══════════════════════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
+// 
 //  S3 MiniOS v4.0 - PART 5: Setup & Loop
 //  Place this file in the same folder as S3_MiniOS.ino
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  WORLD CLOCK CARDS - Ghana (UTC+0), Japan (UTC+9), Mackay (UTC+10)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createWorldClockCard(int clockIndex) {
     if (clockIndex < 0 || clockIndex >= NUM_WORLD_CLOCKS) clockIndex = 0;
     
@@ -5265,9 +5050,9 @@ void createWorldClockCard(int clockIndex) {
     createMiniStatusBar(card);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TORCH CARD - Flashlight with on/off toggle
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createTorchCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
@@ -5338,9 +5123,9 @@ void createTorchCard() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  TORCH SETTINGS CARD - Brightness slider and color selection
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createTorchSettingsCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
@@ -5436,9 +5221,9 @@ void createTorchSettingsCard() {
     createMiniStatusBar(card);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  IMPROVED STOPWATCH CARD WITH LAPS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createStopwatchCardImproved() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
@@ -5565,9 +5350,9 @@ void createStopwatchCardImproved() {
     createMiniStatusBar(card);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  IMPROVED WEATHER CARD WITH VISUAL ICONS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createWeatherCardImproved() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
@@ -5627,7 +5412,7 @@ void createWeatherCardImproved() {
     
     // Temperature (large)
     char tempBuf[16];
-    snprintf(tempBuf, sizeof(tempBuf), "%.0f°", weatherTemp);
+    snprintf(tempBuf, sizeof(tempBuf), "%.0f", weatherTemp);
     lv_obj_t *tempLabel = lv_label_create(card);
     lv_label_set_text(tempLabel, tempBuf);
     lv_obj_set_style_text_color(tempLabel, lv_color_hex(0xFFFFFF), 0);
@@ -5651,7 +5436,7 @@ void createWeatherCardImproved() {
     
     // High temp
     char highBuf[16];
-    snprintf(highBuf, sizeof(highBuf), "H: %.0f°", weatherHigh);
+    snprintf(highBuf, sizeof(highBuf), "H: %.0f", weatherHigh);
     lv_obj_t *highLabel = lv_label_create(hlContainer);
     lv_label_set_text(highLabel, highBuf);
     lv_obj_set_style_text_color(highLabel, lv_color_hex(0xFF453A), 0);
@@ -5660,7 +5445,7 @@ void createWeatherCardImproved() {
     
     // Low temp
     char lowBuf[16];
-    snprintf(lowBuf, sizeof(lowBuf), "L: %.0f°", weatherLow);
+    snprintf(lowBuf, sizeof(lowBuf), "L: %.0f", weatherLow);
     lv_obj_t *lowLabel = lv_label_create(hlContainer);
     lv_label_set_text(lowLabel, lowBuf);
     lv_obj_set_style_text_color(lowLabel, lv_color_hex(0x0A84FF), 0);
@@ -5670,9 +5455,9 @@ void createWeatherCardImproved() {
     createMiniStatusBar(card);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  CALCULATOR CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createCalculatorCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
@@ -5766,9 +5551,9 @@ void createCalculatorCard() {
     createMiniStatusBar(card);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  CLICKER CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createClickerCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
@@ -5823,9 +5608,9 @@ void createClickerCard() {
     createMiniStatusBar(card);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  REACTION TEST CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void createReactionTestCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
@@ -5902,9 +5687,9 @@ void createReactionTestCard() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  DAILY CHALLENGE CARD
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void generateChallenge() {
     challengeType = random(0, 3);  // 0=Math, 1=Memory, 2=Trivia
     challengeAnswered = false;
@@ -6060,9 +5845,9 @@ void createDailyChallengeCard() {
     createMiniStatusBar(card);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  STEP DETECTION
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 float prevMag = 1.0, prevPrevMag = 1.0;
 unsigned long lastStepTime = 0;
 
@@ -6089,9 +5874,9 @@ void updateStepCount() {
     prevMag = currentMag;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  DINO GAME UPDATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void updateDinoGame() {
     if (currentCategory != CAT_GAMES || currentSubCard != 1) return;
     if (dinoGameOver) return;
@@ -6124,9 +5909,9 @@ void updateDinoGame() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  YES/NO SPINNER UPDATE
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void updateYesNoSpinner() {
     if (!yesNoSpinning) return;
     if (currentCategory != CAT_GAMES || currentSubCard != 2) return;
@@ -6141,9 +5926,9 @@ void updateYesNoSpinner() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  CHARGING ANIMATION
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void updateChargingAnimation() {
     if (!isCharging) return;
     
@@ -6153,11 +5938,11 @@ void updateChargingAnimation() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  SHUTDOWN PROGRESS VISUAL INDICATOR FUNCTIONS (FIX 1 - v4.1)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
 void showShutdownProgress() {
     if (!screenOn || !showingShutdownProgress) return;
@@ -6300,12 +6085,12 @@ void hideShutdownProgress() {
 }
 
 //  POWER BUTTON HANDLER
-// ═══════════════════════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
+// 
 //  POWER BUTTON HANDLER (GPIO10) - SCREEN TOGGLE ONLY
-//  • Quick tap: Toggle screen on/off
-//  • No shutdown on this button anymore
-// ═══════════════════════════════════════════════════════════════════════════════
+//   Quick tap: Toggle screen on/off
+//   No shutdown on this button anymore
+// 
 void handlePowerButton() {
     static bool lastPwrButtonState = HIGH;
     static unsigned long lastPwrDebounceTime = 0;
@@ -6347,10 +6132,10 @@ void handlePowerButton() {
             // Toggle screen on short press
             if (pressDuration >= POWER_BUTTON_MIN_TAP_MS && pressDuration < 2000) {
                 if (screenOn) {
-                    USBSerial.println("[PWR] Tap → Screen OFF");
+                    USBSerial.println("[PWR] Tap  Screen OFF");
                     screenOff();
                 } else {
-                    USBSerial.println("[PWR] Tap → Screen ON");
+                    USBSerial.println("[PWR] Tap  Screen ON");
                     screenOnFunc();
                 }
             }
@@ -6360,11 +6145,11 @@ void handlePowerButton() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  BOOT BUTTON HANDLER (GPIO0) - Category Navigation + Shutdown
-//  • Short press: Move to next category (infinite loop)
-//  • Long hold (5s): Shutdown with Apple-style progress UI
-// ═══════════════════════════════════════════════════════════════════════════════
+//   Short press: Move to next category (infinite loop)
+//   Long hold (5s): Shutdown with Apple-style progress UI
+// 
 void handleBootButton() {
     static bool lastBootButtonState = HIGH;
     static unsigned long lastBootDebounceTime = 0;
@@ -6409,7 +6194,7 @@ void handleBootButton() {
             if (pressDuration >= 1000 && !visualIndicatorShown && screenOn) {
                 visualIndicatorShown = true;
                 showingShutdownProgress = true;
-                USBSerial.println("[BOOT] 🔴 Shutdown progress shown");
+                USBSerial.println("[BOOT]  Shutdown progress shown");
             }
             
             // Update visual progress
@@ -6433,17 +6218,17 @@ void handleBootButton() {
         // Cancel shutdown if in progress
         if (showingShutdownProgress) {
             hideShutdownProgress();
-            USBSerial.println("[BOOT] ❌ Shutdown cancelled");
+            USBSerial.println("[BOOT]  Shutdown cancelled");
         }
         // Short press - navigate categories
         else if (pressDuration >= POWER_BUTTON_MIN_TAP_MS && pressDuration < 1000) {
             if (!screenOn) {
-                USBSerial.println("[BOOT] Tap → Screen ON");
+                USBSerial.println("[BOOT] Tap  Screen ON");
                 screenOnFunc();
             } else if (canNavigate()) {
                 // Navigate to next category (infinite loop)
                 int newCategory = (currentCategory + 1) % NUM_CATEGORIES;
-                USBSerial.printf("[BOOT] Category %d → %d\n", currentCategory, newCategory);
+                USBSerial.printf("[BOOT] Category %d  %d\n", currentCategory, newCategory);
                 
                 navigationLocked = true;
                 currentCategory = newCategory;
@@ -6460,13 +6245,13 @@ void handleBootButton() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  SETUP
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  IDENTITY SYSTEM FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
 void addNotification(const char* message, lv_color_t color) {
   if (notificationCount >= MAX_NOTIFICATIONS) return;
@@ -6483,25 +6268,10 @@ void addNotification(const char* message, lv_color_t color) {
   USBSerial.printf("[NOTIFICATION] %s\n", message);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  EXTENDED IDENTITY SYSTEM FUNCTIONS (15 IDENTITIES)
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 
-void addNotification(const char* message, lv_color_t color) {
-  if (notificationCount >= MAX_NOTIFICATIONS) return;
-  
-  strncpy(notifications[notificationCount].message, message, 63);
-  notifications[notificationCount].timestamp = millis();
-  notifications[notificationCount].active = true;
-  notifications[notificationCount].color = color;
-  notificationCount++;
-  
-  showingNotification = true;
-  notificationStartMs = millis();
-  
-  USBSerial.printf("[NOTIFICATION] %s
-", message);
-}
 
 void trackDailySteps() {
   if (!hasRTC) return;
@@ -6539,166 +6309,147 @@ void trackGameLost() {
 }
 
 
-void trackDailySteps() {
-  if (!hasRTC) return;
-  RTC_DateTime dt = rtc.getDateTime();
-  uint32_t currentDayOfYear = dt.getMonth() * 31 + dt.getDay();
-  if (questProgress.lastDayOfYear != currentDayOfYear) {
-    questProgress.currentDaySteps = userData.steps;
-    questProgress.lastDayOfYear = currentDayOfYear;
-  }
-}
-
-void trackStopwatchUse() { questProgress.stopwatchUses++; }
-void trackGamePlayed() { questProgress.gamesPlayed++; }
-void trackGameWon() {
-  if (questProgress.lastGameWon == 1) questProgress.consecutiveWins++;
-  else questProgress.consecutiveWins = 1;
-  questProgress.lastGameWon = 1;
-}
-void trackGameLost() { questProgress.consecutiveWins = 0; questProgress.lastGameWon = 0; }
-
 void checkIdentityUnlocks() {
-  // 💣 Chaos - Random unlock (1% per hour)
+  //  Chaos - Random unlock (1% per hour)
   if (!cardIdentities[IDENTITY_CHAOS].unlocked) {
     if (millis() - questProgress.chaosCheckTime >= 3600000) {
       questProgress.chaosCheckTime = millis();
       if (random(100) < 1) {
         cardIdentities[IDENTITY_CHAOS].unlocked = true;
         userData.identitiesUnlocked[IDENTITY_CHAOS] = true;
-        addNotification("💣 CHAOS UNLOCKED!", lv_color_hex(0xFF453A));
+        addNotification(" CHAOS UNLOCKED!", lv_color_hex(0xFF453A));
       }
     }
   }
   
-  // 🧠 Focus - 7-day step streak
+  //  Focus - 7-day step streak
   if (!cardIdentities[IDENTITY_FOCUS].unlocked) {
     cardIdentities[IDENTITY_FOCUS].currentProgress = userData.stepStreak;
     if (userData.stepStreak >= 7) {
       cardIdentities[IDENTITY_FOCUS].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_FOCUS] = true;
-      addNotification("🧠 FOCUS UNLOCKED!", lv_color_hex(0x5E5CE6));
+      addNotification(" FOCUS UNLOCKED!", lv_color_hex(0x5E5CE6));
     }
   }
   
-  // ❄ Frostbite - 20,000 total steps
+  //  Frostbite - 20,000 total steps
   if (!cardIdentities[IDENTITY_FROSTBITE].unlocked) {
     cardIdentities[IDENTITY_FROSTBITE].currentProgress = userData.steps;
     if (userData.steps >= 20000) {
       cardIdentities[IDENTITY_FROSTBITE].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_FROSTBITE] = true;
-      addNotification("❄ FROSTBITE UNLOCKED!", lv_color_hex(0x64D2FF));
+      addNotification(" FROSTBITE UNLOCKED!", lv_color_hex(0x64D2FF));
     }
   }
   
-  // 🥶 Subzero - 3-day consecutive usage
+  //  Subzero - 3-day consecutive usage
   if (!cardIdentities[IDENTITY_SUBZERO].unlocked) {
     cardIdentities[IDENTITY_SUBZERO].currentProgress = userData.consecutiveDays;
     if (userData.consecutiveDays >= 3) {
       cardIdentities[IDENTITY_SUBZERO].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_SUBZERO] = true;
-      addNotification("🥶 SUBZERO UNLOCKED!", lv_color_hex(0x00C7BE));
+      addNotification(" SUBZERO UNLOCKED!", lv_color_hex(0x00C7BE));
     }
   }
   
-  // 🧊 Cold - Win 5 Blackjack games
+  //  Cold - Win 5 Blackjack games
   if (!cardIdentities[IDENTITY_COLD].unlocked) {
     cardIdentities[IDENTITY_COLD].currentProgress = userData.gamesWon;
     if (userData.gamesWon >= 5) {
       cardIdentities[IDENTITY_COLD].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_COLD] = true;
-      addNotification("🧊 COLD UNLOCKED!", lv_color_hex(0x5AC8FA));
+      addNotification(" COLD UNLOCKED!", lv_color_hex(0x5AC8FA));
     }
   }
   
-  // 🪐 Orbit - Use compass 100 times
+  //  Orbit - Use compass 100 times
   if (!cardIdentities[IDENTITY_ORBIT].unlocked) {
     cardIdentities[IDENTITY_ORBIT].currentProgress = userData.compassUseCount;
     if (userData.compassUseCount >= 100) {
       cardIdentities[IDENTITY_ORBIT].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_ORBIT] = true;
-      addNotification("🪐 ORBIT UNLOCKED!", lv_color_hex(0xFF9F0A));
+      addNotification(" ORBIT UNLOCKED!", lv_color_hex(0xFF9F0A));
     }
   }
   
-  // 🌊 Flux - Play 10 total games
+  //  Flux - Play 10 total games
   if (!cardIdentities[IDENTITY_FLUX].unlocked) {
     cardIdentities[IDENTITY_FLUX].currentProgress = questProgress.gamesPlayed;
     if (questProgress.gamesPlayed >= 10) {
       cardIdentities[IDENTITY_FLUX].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_FLUX] = true;
-      addNotification("🌊 FLUX UNLOCKED!", lv_color_hex(0x0A84FF));
+      addNotification(" FLUX UNLOCKED!", lv_color_hex(0x0A84FF));
     }
   }
   
-  // 🌠 Nova - 50,000 total steps
+  //  Nova - 50,000 total steps
   if (!cardIdentities[IDENTITY_NOVA].unlocked) {
     cardIdentities[IDENTITY_NOVA].currentProgress = userData.steps;
     if (userData.steps >= 50000) {
       cardIdentities[IDENTITY_NOVA].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_NOVA] = true;
-      addNotification("🌠 NOVA UNLOCKED!", lv_color_hex(0xFF9F0A));
+      addNotification(" NOVA UNLOCKED!", lv_color_hex(0xFF9F0A));
     }
   }
   
-  // 🫀 Pulse - 10,000 steps in one day
+  //  Pulse - 10,000 steps in one day
   if (!cardIdentities[IDENTITY_PULSE].unlocked) {
     uint32_t todaySteps = userData.steps - questProgress.currentDaySteps;
     cardIdentities[IDENTITY_PULSE].currentProgress = todaySteps;
     if (todaySteps >= 10000) {
       cardIdentities[IDENTITY_PULSE].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_PULSE] = true;
-      addNotification("🫀 PULSE UNLOCKED!", lv_color_hex(0xFF2D55));
+      addNotification(" PULSE UNLOCKED!", lv_color_hex(0xFF2D55));
     }
   }
   
-  // 🏃 Velocity - 30,000 total steps
+  //  Velocity - 30,000 total steps
   if (!cardIdentities[IDENTITY_VELOCITY].unlocked) {
     cardIdentities[IDENTITY_VELOCITY].currentProgress = userData.steps;
     if (userData.steps >= 30000) {
       cardIdentities[IDENTITY_VELOCITY].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_VELOCITY] = true;
-      addNotification("🏃 VELOCITY UNLOCKED!", lv_color_hex(0x30D158));
+      addNotification(" VELOCITY UNLOCKED!", lv_color_hex(0x30D158));
     }
   }
   
-  // 🎼 Flow - Use stopwatch 50 times
+  //  Flow - Use stopwatch 50 times
   if (!cardIdentities[IDENTITY_FLOW].unlocked) {
     cardIdentities[IDENTITY_FLOW].currentProgress = questProgress.stopwatchUses;
     if (questProgress.stopwatchUses >= 50) {
       cardIdentities[IDENTITY_FLOW].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_FLOW] = true;
-      addNotification("🎼 FLOW UNLOCKED!", lv_color_hex(0xBF5AF2));
+      addNotification(" FLOW UNLOCKED!", lv_color_hex(0xBF5AF2));
     }
   }
   
-  // 🔥 Overdrive - Win 10 games in a row
+  //  Overdrive - Win 10 games in a row
   if (!cardIdentities[IDENTITY_OVERDRIVE].unlocked) {
     cardIdentities[IDENTITY_OVERDRIVE].currentProgress = questProgress.consecutiveWins;
     if (questProgress.consecutiveWins >= 10) {
       cardIdentities[IDENTITY_OVERDRIVE].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_OVERDRIVE] = true;
-      addNotification("🔥 OVERDRIVE UNLOCKED!", lv_color_hex(0xFF453A));
+      addNotification(" OVERDRIVE UNLOCKED!", lv_color_hex(0xFF453A));
     }
   }
   
-  // ⚡ Surge - 14-day step streak
+  //  Surge - 14-day step streak
   if (!cardIdentities[IDENTITY_SURGE].unlocked) {
     cardIdentities[IDENTITY_SURGE].currentProgress = userData.stepStreak;
     if (userData.stepStreak >= 14) {
       cardIdentities[IDENTITY_SURGE].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_SURGE] = true;
-      addNotification("⚡ SURGE UNLOCKED!", lv_color_hex(0xFFD60A));
+      addNotification(" SURGE UNLOCKED!", lv_color_hex(0xFFD60A));
     }
   }
   
-  // 🌑 Eclipse - 7 consecutive days
+  //  Eclipse - 7 consecutive days
   if (!cardIdentities[IDENTITY_ECLIPSE].unlocked) {
     cardIdentities[IDENTITY_ECLIPSE].currentProgress = userData.consecutiveDays;
     if (userData.consecutiveDays >= 7) {
       cardIdentities[IDENTITY_ECLIPSE].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_ECLIPSE] = true;
-      addNotification("🌑 ECLIPSE UNLOCKED!", lv_color_hex(0x1C1C1E));
+      addNotification(" ECLIPSE UNLOCKED!", lv_color_hex(0x1C1C1E));
     }
   }
   
@@ -6714,7 +6465,7 @@ void handleSecretTap() {
     if (questProgress.tapCount >= 10) {
       cardIdentities[IDENTITY_GLITCH].unlocked = true;
       userData.identitiesUnlocked[IDENTITY_GLITCH] = true;
-      addNotification("👾 GLITCH UNLOCKED!", lv_color_hex(0xBF5AF2));
+      addNotification(" GLITCH UNLOCKED!", lv_color_hex(0xBF5AF2));
       questProgress.tapCount = 0;
     }
   } else {
@@ -6772,127 +6523,10 @@ void showNotificationPopup() {
     lv_obj_del(overlay);
   }
 }
-  }
-  
-  // 🧠 Focus - 7-day step streak
-  if (!cardIdentities[IDENTITY_FOCUS].unlocked) {
-    cardIdentities[IDENTITY_FOCUS].currentProgress = userData.stepStreak;
-    if (userData.stepStreak >= 7) {
-      cardIdentities[IDENTITY_FOCUS].unlocked = true;
-      userData.identitiesUnlocked[IDENTITY_FOCUS] = true;
-      addNotification("🧠 FOCUS UNLOCKED!", lv_color_hex(0x5E5CE6));
-    }
-  }
-  
-  // ❄ Frostbite - 20,000 total steps
-  if (!cardIdentities[IDENTITY_FROSTBITE].unlocked) {
-    cardIdentities[IDENTITY_FROSTBITE].currentProgress = userData.steps;
-    if (userData.steps >= 20000) {
-      cardIdentities[IDENTITY_FROSTBITE].unlocked = true;
-      userData.identitiesUnlocked[IDENTITY_FROSTBITE] = true;
-      addNotification("❄ FROSTBITE UNLOCKED!", lv_color_hex(0x64D2FF));
-    }
-  }
-  
-  // 🥶 Subzero - 3-day consecutive usage
-  if (!cardIdentities[IDENTITY_SUBZERO].unlocked) {
-    cardIdentities[IDENTITY_SUBZERO].currentProgress = userData.consecutiveDays;
-    if (userData.consecutiveDays >= 3) {
-      cardIdentities[IDENTITY_SUBZERO].unlocked = true;
-      userData.identitiesUnlocked[IDENTITY_SUBZERO] = true;
-      addNotification("🥶 SUBZERO UNLOCKED!", lv_color_hex(0x00C7BE));
-    }
-  }
-  
-  // 🧊 Cold - Win 5 Blackjack games
-  if (!cardIdentities[IDENTITY_COLD].unlocked) {
-    cardIdentities[IDENTITY_COLD].currentProgress = userData.gamesWon;
-    if (userData.gamesWon >= 5) {
-      cardIdentities[IDENTITY_COLD].unlocked = true;
-      userData.identitiesUnlocked[IDENTITY_COLD] = true;
-      addNotification("🧊 COLD UNLOCKED!", lv_color_hex(0x5AC8FA));
-    }
-  }
-  
-  // 🪐 Orbit - Use compass 100 times
-  if (!cardIdentities[IDENTITY_ORBIT].unlocked) {
-    cardIdentities[IDENTITY_ORBIT].currentProgress = userData.compassUseCount;
-    if (userData.compassUseCount >= 100) {
-      cardIdentities[IDENTITY_ORBIT].unlocked = true;
-      userData.identitiesUnlocked[IDENTITY_ORBIT] = true;
-      addNotification("🪐 ORBIT UNLOCKED!", lv_color_hex(0xFF9F0A));
-    }
-  }
-  
-  saveUserData();
-}
 
-void handleSecretTap() {
-  if (cardIdentities[IDENTITY_GLITCH].unlocked) return;
-  
-  unsigned long now = millis();
-  if (now - questProgress.lastTapTime < 2000) {
-    questProgress.tapCount++;
-    if (questProgress.tapCount >= 10) {
-      cardIdentities[IDENTITY_GLITCH].unlocked = true;
-      userData.identitiesUnlocked[IDENTITY_GLITCH] = true;
-      addNotification("👾 GLITCH UNLOCKED!", lv_color_hex(0xBF5AF2));
-      questProgress.tapCount = 0;
-    }
-  } else {
-    questProgress.tapCount = 1;
-  }
-  questProgress.lastTapTime = now;
-}
 
-void updateConsecutiveDays() {
-  if (!hasRTC) return;
-  
-  RTC_DateTime dt = rtc.getDateTime();
-  uint32_t currentDayOfYear = dt.getMonth() * 31 + dt.getDay();
-  
-  if (userData.lastUseDayOfYear == 0) {
-    userData.consecutiveDays = 1;
-    userData.lastUseDayOfYear = currentDayOfYear;
-  } else if (currentDayOfYear == userData.lastUseDayOfYear + 1) {
-    userData.consecutiveDays++;
-    userData.lastUseDayOfYear = currentDayOfYear;
-  } else if (currentDayOfYear != userData.lastUseDayOfYear) {
-    userData.consecutiveDays = 1;
-    userData.lastUseDayOfYear = currentDayOfYear;
-  }
-}
 
-void showNotificationPopup() {
-  if (!showingNotification || notificationCount == 0) return;
-  
-  Notification &notif = notifications[notificationCount - 1];
-  
-  lv_obj_t *overlay = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(overlay, LCD_WIDTH, 80);
-  lv_obj_align(overlay, LV_ALIGN_TOP_MID, 0, 0);
-  lv_obj_set_style_bg_color(overlay, notif.color, 0);
-  lv_obj_set_style_radius(overlay, 0, 0);
-  lv_obj_set_style_border_width(overlay, 0, 0);
-  
-  lv_obj_t *icon = lv_label_create(overlay);
-  lv_label_set_text(icon, LV_SYMBOL_OK);
-  lv_obj_set_style_text_color(icon, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_style_text_font(icon, &lv_font_montserrat_32, 0);
-  lv_obj_align(icon, LV_ALIGN_LEFT_MID, 20, 0);
-  
-  lv_obj_t *msgLbl = lv_label_create(overlay);
-  lv_label_set_text(msgLbl, notif.message);
-  lv_obj_set_style_text_color(msgLbl, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_style_text_font(msgLbl, &lv_font_montserrat_18, 0);
-  lv_obj_align(msgLbl, LV_ALIGN_LEFT_MID, 70, 0);
-  
-  if (millis() - notificationStartMs >= NOTIFICATION_DURATION) {
-    showingNotification = false;
-    lv_obj_del(overlay);
-  }
-}
-\n
+
 void createIdentityPickerCard() {
   GradientTheme &theme = gradientThemes[userData.themeIndex];
   lv_obj_clean(lv_scr_act());
@@ -6967,7 +6601,7 @@ void createIdentityPickerCard() {
       lv_obj_set_style_border_width(cell, 0, 0);
       
       lv_obj_t *lockIcon = lv_label_create(cell);
-      lv_label_set_text(lockIcon, LV_SYMBOL_LOCK);
+      lv_label_set_text(lockIcon, LV_SYMBOL_CLOSE);  // Use close icon as lock alternative
       lv_obj_set_style_text_color(lockIcon, lv_color_hex(0x636366), 0);
       lv_obj_set_style_text_font(lockIcon, &lv_font_montserrat_20, 0);
       lv_obj_align(lockIcon, LV_ALIGN_CENTER, 0, -8);
@@ -7018,12 +6652,12 @@ void createCurrencyConverterCard() {
     lv_obj_set_size(titleBadge, 220, 40);
     lv_obj_align(titleBadge, LV_ALIGN_TOP_MID, 0, 20);
     lv_obj_set_style_bg_color(titleBadge, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(titleBadge, LV_OPA_15, 0);
+    lv_obj_set_style_bg_opa(titleBadge, LV_OPA_10, 0);
     lv_obj_set_style_radius(titleBadge, 20, 0);
     lv_obj_set_style_border_width(titleBadge, 0, 0);
 
     lv_obj_t *title = lv_label_create(titleBadge);
-    lv_label_set_text(title, "💱 CURRENCY");
+    lv_label_set_text(title, " CURRENCY");
     lv_obj_set_style_text_color(title, lv_color_hex(0x1C1C1E), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
     lv_obj_center(title);
@@ -7033,7 +6667,7 @@ void createCurrencyConverterCard() {
     lv_obj_set_size(sourceContainer, 200, 80);
     lv_obj_align(sourceContainer, LV_ALIGN_TOP_MID, 0, 80);
     lv_obj_set_style_bg_color(sourceContainer, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(sourceContainer, LV_OPA_25, 0);
+    lv_obj_set_style_bg_opa(sourceContainer, LV_OPA_20, 0);
     lv_obj_set_style_radius(sourceContainer, 20, 0);
     lv_obj_set_style_border_width(sourceContainer, 3, 0);
     lv_obj_set_style_border_color(sourceContainer, lv_color_hex(0xFFFFFF), 0);
@@ -7089,7 +6723,7 @@ void createCurrencyConverterCard() {
     lv_obj_set_style_border_opa(usdContainer, LV_OPA_50, 0);
 
     lv_obj_t *usdFlag = lv_label_create(usdContainer);
-    lv_label_set_text(usdFlag, "🇺🇸");
+    lv_label_set_text(usdFlag, "");
     lv_obj_set_style_text_font(usdFlag, &lv_font_montserrat_24, 0);
     lv_obj_align(usdFlag, LV_ALIGN_LEFT_MID, 15, 0);
 
@@ -7117,7 +6751,7 @@ void createCurrencyConverterCard() {
     lv_obj_set_style_border_opa(audContainer, LV_OPA_50, 0);
 
     lv_obj_t *audFlag = lv_label_create(audContainer);
-    lv_label_set_text(audFlag, "🇦🇺");
+    lv_label_set_text(audFlag, "");
     lv_obj_set_style_text_font(audFlag, &lv_font_montserrat_24, 0);
     lv_obj_align(audFlag, LV_ALIGN_LEFT_MID, 15, 0);
 
@@ -7139,7 +6773,7 @@ void createCurrencyConverterCard() {
         lv_obj_set_size(updateBadge, 200, 30);
         lv_obj_align(updateBadge, LV_ALIGN_BOTTOM_MID, 0, -15);
         lv_obj_set_style_bg_color(updateBadge, lv_color_hex(0x000000), 0);
-        lv_obj_set_style_bg_opa(updateBadge, LV_OPA_15, 0);
+        lv_obj_set_style_bg_opa(updateBadge, LV_OPA_10, 0);
         lv_obj_set_style_radius(updateBadge, 15, 0);
         lv_obj_set_style_border_width(updateBadge, 0, 0);
 
@@ -7156,119 +6790,11 @@ void createCurrencyConverterCard() {
         lv_obj_set_style_text_font(updateLabel, &lv_font_montserrat_12, 0);
         lv_obj_center(updateLabel);
     }
-} else {
-        lv_label_set_text(usdLabel, "Loading...");
-    }
-    lv_obj_set_style_text_color(usdLabel, lv_color_hex(0x1C1C1E), 0);
-    lv_obj_set_style_text_font(usdLabel, &lv_font_montserrat_24, 0);
-    lv_obj_align(usdLabel, LV_ALIGN_TOP_MID, 0, 180);
-
-    // AUD conversion
-    lv_obj_t *audLabel = lv_label_create(card);
-    if (currencyData.valid) {
-        char audText[64];
-        snprintf(audText, sizeof(audText), "$%.2f AUD", 100.0 * currencyData.audRate);
-        lv_label_set_text(audLabel, audText);
-    } else {
-        lv_label_set_text(audLabel, "Loading...");
-    }
-    lv_obj_set_style_text_color(audLabel, lv_color_hex(0x1C1C1E), 0);
-    lv_obj_set_style_text_font(audLabel, &lv_font_montserrat_24, 0);
-    lv_obj_align(audLabel, LV_ALIGN_TOP_MID, 0, 220);
-
-    // Last update time
-    if (currencyData.valid) {
-        lv_obj_t *updateLabel = lv_label_create(card);
-        unsigned long minutesAgo = (millis() - currencyData.lastUpdate) / 60000;
-        char updateText[64];
-        if (minutesAgo == 0) {
-            snprintf(updateText, sizeof(updateText), "Updated just now");
-        } else if (minutesAgo == 1) {
-            snprintf(updateText, sizeof(updateText), "Updated 1 minute ago");
-        } else {
-            snprintf(updateText, sizeof(updateText), "Updated %lu minutes ago", minutesAgo);
-        }
-        lv_label_set_text(updateLabel, updateText);
-        lv_obj_set_style_text_color(updateLabel, lv_color_hex(0x636366), 0);
-        lv_obj_set_style_text_font(updateLabel, &lv_font_montserrat_10, 0);
-        lv_obj_align(updateLabel, LV_ALIGN_BOTTOM_MID, 0, -40);
-    }
-
-    // Tap hint
-    lv_obj_t *hint = lv_label_create(card);
-    lv_label_set_text(hint, "Tap to change currency");
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x636366), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_10, 0);
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -15);
 }
-  
-  int cellSize = (LCD_WIDTH < 400) ? 90 : 105;
-  int spacing = 10;
-  int gridX = (LCD_WIDTH - (3 * cellSize + 2 * spacing)) / 2;
-  int gridY = 135;
-  
-  for (int i = 0; i < NUM_IDENTITIES; i++) {
-    int row = i / 3;
-    int col = i % 3;
-    int x = gridX + col * (cellSize + spacing);
-    int y = gridY + row * (cellSize + spacing);
-    
-    lv_obj_t *cell = lv_obj_create(card);
-    lv_obj_set_size(cell, cellSize, cellSize);
-    lv_obj_set_pos(cell, x, y);
-    
-    if (cardIdentities[i].unlocked) {
-      lv_obj_set_style_bg_color(cell, cardIdentities[i].primaryColor, 0);
-      lv_obj_set_style_bg_opa(cell, LV_OPA_30, 0);
-      lv_obj_set_style_border_color(cell, cardIdentities[i].primaryColor, 0);
-      lv_obj_set_style_border_width(cell, i == selectedIdentity ? 3 : 1, 0);
-      
-      lv_obj_t *emoji = lv_label_create(cell);
-      lv_label_set_text(emoji, cardIdentities[i].emoji);
-      lv_obj_set_style_text_font(emoji, &lv_font_montserrat_32, 0);
-      lv_obj_align(emoji, LV_ALIGN_CENTER, 0, -8);
-      
-      lv_obj_t *name = lv_label_create(cell);
-      lv_label_set_text(name, cardIdentities[i].name);
-      lv_obj_set_style_text_color(name, theme.text, 0);
-      lv_obj_set_style_text_font(name, &lv_font_montserrat_10, 0);
-      lv_obj_align(name, LV_ALIGN_BOTTOM_MID, 0, -5);
-    } else {
-      lv_obj_set_style_bg_color(cell, lv_color_hex(0x2C2C2E), 0);
-      lv_obj_set_style_border_width(cell, 0, 0);
-      
-      lv_obj_t *lockIcon = lv_label_create(cell);
-      lv_label_set_text(lockIcon, LV_SYMBOL_LOCK);
-      lv_obj_set_style_text_color(lockIcon, lv_color_hex(0x636366), 0);
-      lv_obj_set_style_text_font(lockIcon, &lv_font_montserrat_32, 0);
-      lv_obj_align(lockIcon, LV_ALIGN_CENTER, 0, -8);
-      
-      if (cardIdentities[i].unlockThreshold > 0) {
-        int progress = (cardIdentities[i].currentProgress * 100) / cardIdentities[i].unlockThreshold;
-        if (progress > 100) progress = 100;
-        
-        char progBuf[8];
-        snprintf(progBuf, sizeof(progBuf), "%d%%", progress);
-        lv_obj_t *progLbl = lv_label_create(cell);
-        lv_label_set_text(progLbl, progBuf);
-        lv_obj_set_style_text_color(progLbl, lv_color_hex(0x636366), 0);
-        lv_obj_set_style_text_font(progLbl, &lv_font_montserrat_10, 0);
-        lv_obj_align(progLbl, LV_ALIGN_BOTTOM_MID, 0, -5);
-      }
-    }
-    
-    lv_obj_set_style_radius(cell, 12, 0);
-  }
-  
-  lv_obj_t *hint = lv_label_create(card);
-  lv_label_set_text(hint, "Tap unlocked identities to select");
-  lv_obj_set_style_text_color(hint, lv_color_hex(0x636366), 0);
-  lv_obj_set_style_text_font(hint, &lv_font_montserrat_10, 0);
-  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -5);
-}
-\n\n// ╔═══════════════════════════════════════════════════════════════════════════╗
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  PREMIUM WIDGET API FUNCTIONS
-// ╚═══════════════════════════════════════════════════════════════════════════╝
+// ═══════════════════════════════════════════════════════════════════════════════
 
 void fetchSunriseSunsetData() {
     if (!wifiConnected) {
@@ -7286,8 +6812,7 @@ void fetchSunriseSunsetData() {
              "https://api.sunrise-sunset.org/json?lat=%.4f&lng=%.4f&formatted=0",
              lat, lng);
     
-    USBSerial.printf("[SUNRISE] Fetching: %s
-", url);
+    USBSerial.printf("[SUNRISE] Fetching: %s\n", url);
     http.begin(url);
     int httpCode = http.GET();
     
@@ -7306,9 +6831,9 @@ void fetchSunriseSunsetData() {
                 // Parse ISO 8601 time: "2025-01-27T21:39:15+00:00"
                 // Extract HH:MM from position 11-15
                 strncpy(sunData.sunriseTime, sunrise + 11, 5);
-                sunData.sunriseTime[5] = ' ';
+                sunData.sunriseTime[5] = '\0';
                 strncpy(sunData.sunsetTime, sunset + 11, 5);
-                sunData.sunsetTime[5] = ' ';
+                sunData.sunsetTime[5] = '\0';
                 
                 // Convert to local time (add GMT offset)
                 int sunriseHour = atoi(sunData.sunriseTime);
@@ -7320,25 +6845,22 @@ void fetchSunriseSunsetData() {
                 snprintf(sunData.sunsetTime, 6, "%02d:%s", sunsetHour, sunData.sunsetTime + 3);
                 
                 // Calculate approximate azimuth angles
-                // Sunrise is roughly east (90°), sunset is roughly west (270°)
-                // For Perth in summer, sunrise ~60-120°, sunset ~240-300°
+                // Sunrise is roughly east (90), sunset is roughly west (270)
+                // For Perth in summer, sunrise ~60-120, sunset ~240-300
                 sunData.sunriseAzimuth = 90.0;  // Simplified - east
                 sunData.sunsetAzimuth = 270.0;  // Simplified - west
                 
                 sunData.valid = true;
                 sunData.lastFetch = millis();
                 
-                USBSerial.printf("[SUNRISE] ✓ Sunrise: %s, Sunset: %s
-", 
+                USBSerial.printf("[SUNRISE] Sunrise: %s, Sunset: %s\n", 
                                sunData.sunriseTime, sunData.sunsetTime);
             }
         } else {
-            USBSerial.printf("[SUNRISE] JSON parse error: %s
-", error.c_str());
+            USBSerial.printf("[SUNRISE] JSON parse error: %s\n", error.c_str());
         }
     } else {
-        USBSerial.printf("[SUNRISE] HTTP error: %d
-", httpCode);
+        USBSerial.printf("[SUNRISE] HTTP error: %d\n", httpCode);
     }
     
     http.end();
@@ -7362,8 +6884,7 @@ void fetchCurrencyRates() {
              "https://api.currencyapi.com/v3/latest?apikey=%s&base_currency=%s&currencies=USD,AUD",
              CURRENCY_API_KEY, currencyData.sourceCurrency);
     
-    USBSerial.printf("[CURRENCY] Fetching rates for %s...
-", currencyData.sourceCurrency);
+    USBSerial.printf("[CURRENCY] Fetching rates for %s...\n", currencyData.sourceCurrency);
     http.begin(url);
     int httpCode = http.GET();
     
@@ -7380,18 +6901,15 @@ void fetchCurrencyRates() {
             currencyData.valid = true;
             currencyData.lastUpdate = millis();
             
-            USBSerial.printf("[CURRENCY] ✓ %s -> USD: %.4f, AUD: %.4f
-",
+            USBSerial.printf("[CURRENCY] %s -> USD: %.4f, AUD: %.4f\n",
                            currencyData.sourceCurrency,
                            currencyData.usdRate,
                            currencyData.audRate);
         } else {
-            USBSerial.printf("[CURRENCY] JSON parse error: %s
-", error.c_str());
+            USBSerial.printf("[CURRENCY] JSON parse error: %s\n", error.c_str());
         }
     } else {
-        USBSerial.printf("[CURRENCY] HTTP error: %d
-", httpCode);
+        USBSerial.printf("[CURRENCY] HTTP error: %d\n", httpCode);
     }
     
     http.end();
@@ -7410,11 +6928,9 @@ void calibrateCompassNorth() {
     if (hasSD) {
         File file = SD_MMC.open("/compass_calibration.txt", FILE_WRITE);
         if (file) {
-            file.printf("%.2f
-", compassNorthOffset);
+            file.printf("%.2f\n", compassNorthOffset);
             file.close();
-            USBSerial.printf("[COMPASS] ✓ Calibration saved: %.2f° offset
-", compassNorthOffset);
+            USBSerial.printf("[COMPASS] Calibration saved: %.2f offset\n", compassNorthOffset);
         }
     }
     
@@ -7428,14 +6944,16 @@ float getCalibratedHeading() {
     return heading;
 }
 
-
-
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SETUP - MAIN INITIALIZATION
+// ═══════════════════════════════════════════════════════════════════════════════
+void setup() {
     USBSerial.begin(115200);
     delay(100);
-    USBSerial.println("\n═══════════════════════════════════════════════════════");
+    USBSerial.println("\n");
     USBSerial.println("   Widget OS v4.0 - ULTIMATE PREMIUM EDITION");
     USBSerial.println("   LVGL UI + Battery Intelligence");
-    USBSerial.println("═══════════════════════════════════════════════════════\n");
+    USBSerial.println("\n");
     
     // Initialize physical buttons
     pinMode(PWR_BUTTON, INPUT_PULLUP);    // GPIO10 - Power management (on/off + shutdown)
@@ -7534,13 +7052,12 @@ float getCalibratedHeading() {
     prefs.begin("minios", true);
     compassNorthOffset = prefs.getFloat("compassOffset", 0.0);
     prefs.end();
-    USBSerial.printf("[COMPASS] Loaded calibration: %.2f° offset
-", compassNorthOffset);
+    USBSerial.printf("[COMPASS] Loaded calibration: %.2f offset\n", compassNorthOffset);
   
-  // NEW: Initialize identity system
-  updateConsecutiveDays();
-  questProgress.chaosCheckTime = millis();
-  USBSerial.println("[IDENTITY] Card Identity System initialized!");
+    // NEW: Initialize identity system
+    updateConsecutiveDays();
+    questProgress.chaosCheckTime = millis();
+    USBSerial.println("[IDENTITY] Card Identity System initialized!");
     
     // Hardcode WiFi credentials (user provided)
     USBSerial.println("[INFO] Setting up hardcoded WiFi credentials");
@@ -7575,7 +7092,7 @@ float getCalibratedHeading() {
             if (getLocalTime(&timeinfo)) {
                 rtc.setDateTime(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
                                timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-                USBSerial.println("[NTP] ✓ RTC synced with NTP - time persisted to RTC");
+                USBSerial.println("[NTP]  RTC synced with NTP - time persisted to RTC");
                 ntpSyncedOnce = true;
                 lastNTPSync = millis();
             }
@@ -7639,9 +7156,9 @@ float getCalibratedHeading() {
     USBSerial.println("\n[READY] S3 MiniOS v4.0 initialized!\n");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  MAIN LOOP
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 void loop() {
     // Handle both physical buttons
     handlePowerButton();   // GPIO10 - Power management (on/off + shutdown)
@@ -7729,9 +7246,9 @@ void loop() {
         fetchCurrencyRates();
     }
     
-    // ═══════════════════════════════════════════════════════════════════════════
+    // 
     // AUTOMATIC FREE WIFI - Check connection and auto-reconnect
-    // ═══════════════════════════════════════════════════════════════════════════
+    // 
     checkWiFiConnection();
     
     // Auto-save (every 2 hours)
@@ -7829,14 +7346,14 @@ void loop() {
     
     // NTP periodic re-sync (every hour while WiFi is connected)
     if (wifiConnected && hasRTC && millis() - lastNTPSync >= NTP_RESYNC_INTERVAL_MS) {
-        USBSerial.println("════════════════════════════════════════════════════");
+        USBSerial.println("");
         USBSerial.println("[NTP] === Scheduled hourly re-sync ===");
-        USBSerial.println("════════════════════════════════════════════════════");
+        USBSerial.println("");
         struct tm timeinfo;
         if (getLocalTime(&timeinfo)) {
             rtc.setDateTime(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
                            timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-            USBSerial.println("[NTP] ✓ RTC time updated from NTP server");
+            USBSerial.println("[NTP]  RTC time updated from NTP server");
             USBSerial.println("[NTP] Next sync in 1 hour (3600000ms)");
         }
         lastNTPSync = millis();
@@ -7845,13 +7362,13 @@ void loop() {
     delay(10);  // Slightly longer delay for stability
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //  S3 MiniOS v4.1 - FIX SUMMARY
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
 //
 //  This file has been automatically patched with the following fixes:
 //
-//  ✅ FIX 1: Power Button Visual Shutdown Indicator
+//   FIX 1: Power Button Visual Shutdown Indicator
 //     - Added showingShutdownProgress, shutdownProgressStartMs variables
 //     - Visual popup appears after 1 second of holding power button
 //     - Progress circle fills from 0-100% over 5 seconds
@@ -7862,12 +7379,12 @@ void loop() {
 //     functions need to be manually added before handlePowerButton().
 //     See /app/arduino_firmware/power_button_fix.cpp for the complete code.
 //
-//  ✅ FIX 2: Navigation Lock After Compass
+//   FIX 2: Navigation Lock After Compass
 //     - Compass refresh rate reduced from 10Hz to 5Hz (marked in code)
 //     - This prevents navigation from being blocked by constant refresh
 //     - Users can now swipe away from compass card smoothly
 //
-//  ✅ FIX 3: NTP Time Sync Verification
+//   FIX 3: NTP Time Sync Verification
 //     - Enhanced logging shows exactly when NTP sync occurs
 //     - Clear markers: WiFi connect + every 1 hour
 //     - Before/after time comparison in serial output
@@ -7883,4 +7400,4 @@ void loop() {
 //  - /app/arduino_firmware/FIXES_APPLIED.md
 //  - /app/arduino_firmware/INSTALLATION_GUIDE.md
 //
-// ═══════════════════════════════════════════════════════════════════════════════
+// 
