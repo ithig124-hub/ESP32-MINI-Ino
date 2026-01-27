@@ -195,11 +195,12 @@ std::unique_ptr<Arduino_IIC> FT3168(new Arduino_FT3x68(IIC_Bus, FT3168_DEVICE_AD
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#define NUM_CATEGORIES 12
+#define NUM_CATEGORIES 14
 enum Category {
   CAT_CLOCK = 0, CAT_COMPASS, CAT_ACTIVITY, CAT_GAMES,
   CAT_WEATHER, CAT_STOCKS, CAT_MEDIA, CAT_TIMER,
-  CAT_STREAK, CAT_CALENDAR, CAT_SETTINGS, CAT_SYSTEM
+  CAT_STREAK, CAT_CALENDAR, CAT_TORCH, CAT_TOOLS,
+  CAT_SETTINGS, CAT_SYSTEM
 };
 
 // Navigation state - THE ONLY STATE VARIABLES NEEDED
@@ -212,7 +213,7 @@ int subIndex = 0;       // Vertical index (0 = main card, 1+ = sub-cards)
 
 // Number of sub-cards per category (index 0 = main card, so total cards = value)
 // Example: {2} means main card + 1 sub-card = 2 total cards
-const int maxSubCards[] = {2, 3, 4, 3, 2, 2, 2, 4, 3, 1, 1, 3};
+const int maxSubCards[] = {5, 3, 4, 3, 2, 2, 2, 4, 3, 1, 2, 4, 1, 3};
 
 // Animation state
 bool isTransitioning = false;
@@ -380,6 +381,79 @@ unsigned long breatheStartMs = 0;
 
 int countdownSelected = 2;
 int countdownTimes[] = {60, 180, 300, 600};
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TORCH STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+bool torchOn = false;
+int torchBrightness = 255;
+int torchColorIndex = 0;  // 0=White, 1=Red, 2=Green, 3=Blue, 4=Yellow
+uint32_t torchColors[] = {0xFFFFFF, 0xFF0000, 0x00FF00, 0x0000FF, 0xFFFF00};
+const char* torchColorNames[] = {"White", "Red", "Green", "Blue", "Yellow"};
+#define NUM_TORCH_COLORS 5
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STOPWATCH LAP STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+#define MAX_LAPS 10
+unsigned long lapTimes[MAX_LAPS];
+unsigned long lapTotalTimes[MAX_LAPS];
+int lapCount = 0;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CLICKER STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+uint32_t clickerCount = 0;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  REACTION TEST STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+bool reactionTestActive = false;
+bool reactionWaiting = false;
+unsigned long reactionStartMs = 0;
+unsigned long reactionDelayMs = 0;
+unsigned long lastReactionTime = 0;
+unsigned long bestReactionTime = 9999;
+bool reactionTooEarly = false;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DAILY CHALLENGE STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+int challengeType = 0;  // 0=Math, 1=Memory, 2=Trivia
+int challengeQuestion = 0;
+int challengeAnswer = 0;
+int challengeOptions[4];
+int challengeCorrectIndex = 0;
+bool challengeAnswered = false;
+bool challengeCorrect = false;
+int challengeScore = 0;
+int challengeStreak = 0;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CALCULATOR STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+double calcValue = 0;
+double calcOperand = 0;
+char calcOperator = ' ';
+bool calcNewNumber = true;
+char calcDisplay[16] = "0";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  WORLD CLOCK TIMEZONES (Offset from UTC in seconds)
+// ═══════════════════════════════════════════════════════════════════════════════
+struct WorldClock {
+    const char* city;
+    const char* country;
+    long utcOffset;  // Seconds from UTC
+};
+
+WorldClock worldClocks[] = {
+    {"Ghana", "GH", 0},           // UTC+0
+    {"Japan", "JP", 9 * 3600},    // UTC+9
+    {"Mackay", "AU", 10 * 3600}   // UTC+10
+};
+#define NUM_WORLD_CLOCKS 3
+
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  GAME STATE
@@ -535,6 +609,13 @@ void createBatteryCard();
 void createSystemCard();
 void createBatteryStatsCard();
 void createUsagePatternsCard();
+void createWorldClockCard(int clockIndex);
+void createTorchCard();
+void createTorchSettingsCard();
+void createCalculatorCard();
+void createClickerCard();
+void createReactionTestCard();
+void createDailyChallengeCard();
 void createFactoryResetCard();
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -639,6 +720,134 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
       } else if (duration < 250 && distance < SWIPE_THRESHOLD_MIN) {
         // Short touch with small movement = TAP
         USBSerial.printf("[TOUCH] Tap at x=%d y=%d\n", touchCurrentX, touchCurrentY);
+        // Handle taps on specific cards
+        if (mainIndex == CAT_TORCH && subIndex == 0) {
+            // Toggle torch on tap
+            torchOn = !torchOn;
+            navigateTo(mainIndex, subIndex);
+        }
+        else if (mainIndex == CAT_TOOLS && subIndex == 1) {
+            // Clicker - increment count on tap
+            clickerCount++;
+            navigateTo(mainIndex, subIndex);
+        }
+        else if (mainIndex == CAT_TOOLS && subIndex == 2) {
+            // Reaction test handling
+            if (reactionTooEarly) {
+                reactionTooEarly = false;
+                reactionTestActive = false;
+                reactionWaiting = false;
+                navigateTo(mainIndex, subIndex);
+            }
+            else if (reactionWaiting) {
+                // Calculate reaction time
+                lastReactionTime = millis() - reactionStartMs;
+                if (lastReactionTime < bestReactionTime) bestReactionTime = lastReactionTime;
+                reactionWaiting = false;
+                reactionTestActive = false;
+                navigateTo(mainIndex, subIndex);
+            }
+            else if (reactionTestActive) {
+                // Tapped too early!
+                reactionTooEarly = true;
+                reactionTestActive = false;
+                navigateTo(mainIndex, subIndex);
+            }
+            else {
+                // Start test
+                reactionTestActive = true;
+                reactionDelayMs = random(1500, 4000);
+                reactionStartMs = millis();
+                navigateTo(mainIndex, subIndex);
+            }
+        }
+        else if (mainIndex == CAT_TIMER && subIndex == 1) {
+            // Stopwatch - handle tap based on Y position
+            if (touchCurrentY < LCD_HEIGHT / 2) {
+                // Top half - Start/Stop
+                if (stopwatchRunning) {
+                    stopwatchElapsedMs += (millis() - stopwatchStartMs);
+                    stopwatchRunning = false;
+                } else {
+                    stopwatchStartMs = millis();
+                    stopwatchRunning = true;
+                }
+            } else {
+                // Bottom half - Lap/Reset
+                if (stopwatchRunning) {
+                    // Record lap
+                    if (lapCount < MAX_LAPS) {
+                        unsigned long currentTotal = stopwatchElapsedMs + (millis() - stopwatchStartMs);
+                        unsigned long lapTime = (lapCount > 0) ? currentTotal - lapTotalTimes[lapCount - 1] : currentTotal;
+                        lapTimes[lapCount] = lapTime;
+                        lapTotalTimes[lapCount] = currentTotal;
+                        lapCount++;
+                    }
+                } else {
+                    // Reset
+                    stopwatchElapsedMs = 0;
+                    lapCount = 0;
+                }
+            }
+            navigateTo(mainIndex, subIndex);
+        }
+        else if (mainIndex == CAT_TOOLS && subIndex == 3) {
+            // Daily Challenge - check which option was tapped
+            if (!challengeAnswered) {
+                int btnW = (LCD_WIDTH - 80) / 2;
+                int btnH = 50;
+                int startY = 100 + 12;  // Account for card offset
+                int startX = 25 + 12;
+                
+                for (int i = 0; i < 4; i++) {
+                    int row = i / 2;
+                    int col = i % 2;
+                    int btnX = startX + col * (btnW + 10);
+                    int btnY = startY + row * (btnH + 10);
+                    
+                    if (touchCurrentX >= btnX && touchCurrentX <= btnX + btnW &&
+                        touchCurrentY >= btnY && touchCurrentY <= btnY + btnH) {
+                        challengeAnswered = true;
+                        challengeCorrect = (challengeOptions[i] == challengeAnswer);
+                        if (challengeCorrect) {
+                            challengeScore++;
+                            challengeStreak++;
+                        } else {
+                            challengeStreak = 0;
+                        }
+                        break;
+                    }
+                }
+            }
+            navigateTo(mainIndex, subIndex);
+        }
+        else if (mainIndex == CAT_TORCH && subIndex == 1) {
+            // Torch settings - handle brightness and color taps
+            // Brightness bar area
+            if (touchCurrentY >= 75 + 12 && touchCurrentY <= 105 + 12) {
+                int barWidth = LCD_WIDTH - 80;
+                int barX = 40;
+                if (touchCurrentX >= barX && touchCurrentX <= barX + barWidth) {
+                    torchBrightness = ((touchCurrentX - barX) * 255) / barWidth;
+                    if (torchBrightness < 50) torchBrightness = 50;
+                    if (torchBrightness > 255) torchBrightness = 255;
+                }
+            }
+            // Color swatch area
+            else if (touchCurrentY >= 185 + 12 && touchCurrentY <= 225 + 12) {
+                int swatchSize = 40;
+                int startX = (LCD_WIDTH - 24 - NUM_TORCH_COLORS * (swatchSize + 10)) / 2 + 12;
+                for (int i = 0; i < NUM_TORCH_COLORS; i++) {
+                    int swatchX = startX + i * (swatchSize + 10);
+                    if (touchCurrentX >= swatchX && touchCurrentX <= swatchX + swatchSize) {
+                        torchColorIndex = i;
+                        break;
+                    }
+                }
+            }
+            navigateTo(mainIndex, subIndex);
+        }
+
       }
     }
   }
@@ -1587,7 +1796,8 @@ void navigateTo(int category, int sub) {
     switch (category) {
         case CAT_CLOCK:
             if (sub == 0) createClockCard();
-            else createAnalogClockCard();
+            else if (sub == 1) createAnalogClockCard();
+            else createWorldClockCard(sub - 2);  // Ghana=0, Japan=1, Mackay=2
             break;
         case CAT_COMPASS:
             if (sub == 0) createCompassCard();
@@ -1630,6 +1840,16 @@ void navigateTo(int category, int sub) {
             break;
         case CAT_CALENDAR:
             createCalendarCard();
+            break;
+        case CAT_TORCH:
+            if (sub == 0) createTorchCard();
+            else createTorchSettingsCard();
+            break;
+        case CAT_TOOLS:
+            if (sub == 0) createCalculatorCard();
+            else if (sub == 1) createClickerCard();
+            else if (sub == 2) createReactionTestCard();
+            else createDailyChallengeCard();
             break;
         case CAT_SETTINGS:
             createSettingsCard();
@@ -1866,24 +2086,7 @@ void createDistanceCard() { createCard("DISTANCE"); createMiniStatusBar(lv_obj_g
 void createBlackjackCard() { createCard("BLACKJACK"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createDinoCard() { createCard("DINO GAME"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createYesNoCard() { createCard("YES/NO"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
-void createWeatherCard() { 
-    lv_obj_t *card = createCard("WEATHER");
-    
-    char tempBuf[16];
-    snprintf(tempBuf, sizeof(tempBuf), "%.0f°", weatherTemp);
-    lv_obj_t *tempLabel = lv_label_create(card);
-    lv_label_set_text(tempLabel, tempBuf);
-    lv_obj_set_style_text_color(tempLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(tempLabel, &lv_font_montserrat_48, 0);
-    lv_obj_align(tempLabel, LV_ALIGN_CENTER, 0, -20);
-    
-    lv_obj_t *descLabel = lv_label_create(card);
-    lv_label_set_text(descLabel, weatherDesc.c_str());
-    lv_obj_set_style_text_color(descLabel, lv_color_hex(0x636366), 0);
-    lv_obj_align(descLabel, LV_ALIGN_CENTER, 0, 30);
-    
-    createMiniStatusBar(card);
-}
+void createWeatherCard() { createWeatherCardImproved(); }
 void createForecastCard() { createCard("FORECAST"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createStocksCard() { createCard("STOCKS"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createCryptoCard() { 
@@ -1910,7 +2113,7 @@ void createCryptoCard() {
 void createMusicCard() { createCard("MUSIC"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createGalleryCard() { createCard("GALLERY"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createSandTimerCard() { createCard("TIMER"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
-void createStopwatchCard() { createCard("STOPWATCH"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
+void createStopwatchCard() { createStopwatchCardImproved(); }
 void createCountdownCard() { createCard("COUNTDOWN"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createBreatheCard() { createCard("BREATHE"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createStepStreakCard() { createCard("STREAK"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
@@ -1939,6 +2142,875 @@ void createBatteryCard() {
 void createBatteryStatsCard() { createCard("BATTERY STATS"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createUsagePatternsCard() { createCard("USAGE"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
 void createFactoryResetCard() { createCard("RESET"); createMiniStatusBar(lv_obj_get_child(lv_scr_act(), 0)); }
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  WORLD CLOCK CARDS - Ghana (UTC+0), Japan (UTC+9), Mackay (UTC+10)
+// ═══════════════════════════════════════════════════════════════════════════════
+void createWorldClockCard(int clockIndex) {
+    if (clockIndex < 0 || clockIndex >= NUM_WORLD_CLOCKS) clockIndex = 0;
+    
+    GradientTheme &theme = gradientThemes[userData.themeIndex];
+    WorldClock &wc = worldClocks[clockIndex];
+    
+    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0C), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 28, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    
+    // City name
+    lv_obj_t *cityLabel = lv_label_create(card);
+    lv_label_set_text(cityLabel, wc.city);
+    lv_obj_set_style_text_color(cityLabel, theme.accent, 0);
+    lv_obj_set_style_text_font(cityLabel, &lv_font_montserrat_24, 0);
+    lv_obj_align(cityLabel, LV_ALIGN_TOP_MID, 0, 30);
+    
+    // Calculate local time for this timezone
+    time_t now;
+    time(&now);
+    now += wc.utcOffset - gmtOffsetSec;  // Adjust from local to world clock timezone
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+    
+    char timeBuf[16];
+    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+    
+    // Large time display
+    lv_obj_t *timeLabel = lv_label_create(card);
+    lv_label_set_text(timeLabel, timeBuf);
+    lv_obj_set_style_text_color(timeLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(timeLabel, &lv_font_montserrat_48, 0);
+    lv_obj_align(timeLabel, LV_ALIGN_CENTER, 0, -20);
+    
+    // Seconds
+    char secBuf[8];
+    snprintf(secBuf, sizeof(secBuf), ":%02d", timeinfo.tm_sec);
+    lv_obj_t *secLabel = lv_label_create(card);
+    lv_label_set_text(secLabel, secBuf);
+    lv_obj_set_style_text_color(secLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(secLabel, &lv_font_montserrat_20, 0);
+    lv_obj_align(secLabel, LV_ALIGN_CENTER, 85, -20);
+    
+    // UTC offset info
+    char offsetBuf[32];
+    int hours = wc.utcOffset / 3600;
+    snprintf(offsetBuf, sizeof(offsetBuf), "UTC%s%d", hours >= 0 ? "+" : "", hours);
+    lv_obj_t *offsetLabel = lv_label_create(card);
+    lv_label_set_text(offsetLabel, offsetBuf);
+    lv_obj_set_style_text_color(offsetLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(offsetLabel, &lv_font_montserrat_14, 0);
+    lv_obj_align(offsetLabel, LV_ALIGN_CENTER, 0, 40);
+    
+    // Date
+    const char* dayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    char dateBuf[32];
+    snprintf(dateBuf, sizeof(dateBuf), "%s %02d/%02d", dayNames[timeinfo.tm_wday], timeinfo.tm_mday, timeinfo.tm_mon + 1);
+    lv_obj_t *dateLabel = lv_label_create(card);
+    lv_label_set_text(dateLabel, dateBuf);
+    lv_obj_set_style_text_color(dateLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(dateLabel, &lv_font_montserrat_14, 0);
+    lv_obj_align(dateLabel, LV_ALIGN_CENTER, 0, 65);
+    
+    createMiniStatusBar(card);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TORCH CARD - Flashlight with on/off toggle
+// ═══════════════════════════════════════════════════════════════════════════════
+void createTorchCard() {
+    GradientTheme &theme = gradientThemes[userData.themeIndex];
+    
+    // If torch is on, show bright color, otherwise show dark card
+    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    
+    if (torchOn) {
+        lv_obj_set_style_bg_color(card, lv_color_hex(torchColors[torchColorIndex]), 0);
+        gfx->setBrightness(torchBrightness);
+    } else {
+        lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0C), 0);
+        gfx->setBrightness(batterySaverMode ? 100 : userData.brightness);
+    }
+    
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 28, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    
+    // Title
+    lv_obj_t *titleLabel = lv_label_create(card);
+    lv_label_set_text(titleLabel, "TORCH");
+    lv_obj_set_style_text_color(titleLabel, torchOn ? lv_color_hex(0x000000) : lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 16, 16);
+    
+    // Power icon (large button area)
+    lv_obj_t *powerBtn = lv_obj_create(card);
+    lv_obj_set_size(powerBtn, 120, 120);
+    lv_obj_align(powerBtn, LV_ALIGN_CENTER, 0, -20);
+    lv_obj_set_style_bg_color(powerBtn, torchOn ? lv_color_hex(0x000000) : theme.accent, 0);
+    lv_obj_set_style_bg_opa(powerBtn, torchOn ? LV_OPA_30 : LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(powerBtn, 60, 0);
+    lv_obj_set_style_border_width(powerBtn, 0, 0);
+    
+    lv_obj_t *powerIcon = lv_label_create(powerBtn);
+    lv_label_set_text(powerIcon, LV_SYMBOL_POWER);
+    lv_obj_set_style_text_color(powerIcon, torchOn ? lv_color_hex(0x000000) : lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(powerIcon, &lv_font_montserrat_48, 0);
+    lv_obj_center(powerIcon);
+    
+    // Status text
+    lv_obj_t *statusLabel = lv_label_create(card);
+    lv_label_set_text(statusLabel, torchOn ? "TAP to turn OFF" : "TAP to turn ON");
+    lv_obj_set_style_text_color(statusLabel, torchOn ? lv_color_hex(0x000000) : lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(statusLabel, &lv_font_montserrat_14, 0);
+    lv_obj_align(statusLabel, LV_ALIGN_CENTER, 0, 70);
+    
+    // Color indicator
+    char colorBuf[32];
+    snprintf(colorBuf, sizeof(colorBuf), "Color: %s", torchColorNames[torchColorIndex]);
+    lv_obj_t *colorLabel = lv_label_create(card);
+    lv_label_set_text(colorLabel, colorBuf);
+    lv_obj_set_style_text_color(colorLabel, torchOn ? lv_color_hex(0x000000) : lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(colorLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(colorLabel, LV_ALIGN_CENTER, 0, 95);
+    
+    // Swipe down hint
+    lv_obj_t *hintLabel = lv_label_create(card);
+    lv_label_set_text(hintLabel, "Swipe down for settings");
+    lv_obj_set_style_text_color(hintLabel, torchOn ? lv_color_hex(0x000000) : lv_color_hex(0x3A3A3C), 0);
+    lv_obj_set_style_text_font(hintLabel, &lv_font_montserrat_10, 0);
+    lv_obj_align(hintLabel, LV_ALIGN_BOTTOM_MID, 0, -40);
+    
+    if (!torchOn) {
+        createMiniStatusBar(card);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TORCH SETTINGS CARD - Brightness slider and color selection
+// ═══════════════════════════════════════════════════════════════════════════════
+void createTorchSettingsCard() {
+    GradientTheme &theme = gradientThemes[userData.themeIndex];
+    
+    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0C), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 28, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    
+    // Title
+    lv_obj_t *titleLabel = lv_label_create(card);
+    lv_label_set_text(titleLabel, "TORCH SETTINGS");
+    lv_obj_set_style_text_color(titleLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 16, 16);
+    
+    // Brightness section
+    lv_obj_t *brightLabel = lv_label_create(card);
+    lv_label_set_text(brightLabel, "BRIGHTNESS");
+    lv_obj_set_style_text_color(brightLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(brightLabel, &lv_font_montserrat_14, 0);
+    lv_obj_align(brightLabel, LV_ALIGN_TOP_MID, 0, 50);
+    
+    // Brightness bar
+    lv_obj_t *brightBar = lv_obj_create(card);
+    lv_obj_set_size(brightBar, LCD_WIDTH - 80, 30);
+    lv_obj_align(brightBar, LV_ALIGN_TOP_MID, 0, 75);
+    lv_obj_set_style_bg_color(brightBar, lv_color_hex(0x2C2C2E), 0);
+    lv_obj_set_style_radius(brightBar, 15, 0);
+    lv_obj_set_style_border_width(brightBar, 0, 0);
+    
+    // Brightness fill
+    int fillWidth = ((LCD_WIDTH - 80) * torchBrightness) / 255;
+    lv_obj_t *brightFill = lv_obj_create(brightBar);
+    lv_obj_set_size(brightFill, fillWidth, 26);
+    lv_obj_align(brightFill, LV_ALIGN_LEFT_MID, 2, 0);
+    lv_obj_set_style_bg_color(brightFill, theme.accent, 0);
+    lv_obj_set_style_radius(brightFill, 13, 0);
+    lv_obj_set_style_border_width(brightFill, 0, 0);
+    
+    // Brightness percentage
+    char brightBuf[8];
+    snprintf(brightBuf, sizeof(brightBuf), "%d%%", (torchBrightness * 100) / 255);
+    lv_obj_t *brightPctLabel = lv_label_create(card);
+    lv_label_set_text(brightPctLabel, brightBuf);
+    lv_obj_set_style_text_color(brightPctLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(brightPctLabel, &lv_font_montserrat_18, 0);
+    lv_obj_align(brightPctLabel, LV_ALIGN_TOP_MID, 0, 115);
+    
+    // Color section
+    lv_obj_t *colorLabel = lv_label_create(card);
+    lv_label_set_text(colorLabel, "COLOR");
+    lv_obj_set_style_text_color(colorLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(colorLabel, &lv_font_montserrat_14, 0);
+    lv_obj_align(colorLabel, LV_ALIGN_TOP_MID, 0, 160);
+    
+    // Color swatches
+    int swatchSize = 40;
+    int startX = -(NUM_TORCH_COLORS * (swatchSize + 10)) / 2 + swatchSize/2;
+    
+    for (int i = 0; i < NUM_TORCH_COLORS; i++) {
+        lv_obj_t *swatch = lv_obj_create(card);
+        lv_obj_set_size(swatch, swatchSize, swatchSize);
+        lv_obj_align(swatch, LV_ALIGN_TOP_MID, startX + i * (swatchSize + 10), 185);
+        lv_obj_set_style_bg_color(swatch, lv_color_hex(torchColors[i]), 0);
+        lv_obj_set_style_radius(swatch, swatchSize/2, 0);
+        
+        if (i == torchColorIndex) {
+            lv_obj_set_style_border_width(swatch, 3, 0);
+            lv_obj_set_style_border_color(swatch, lv_color_hex(0xFFFFFF), 0);
+        } else {
+            lv_obj_set_style_border_width(swatch, 1, 0);
+            lv_obj_set_style_border_color(swatch, lv_color_hex(0x3A3A3C), 0);
+        }
+    }
+    
+    // Current color name
+    lv_obj_t *colorNameLabel = lv_label_create(card);
+    lv_label_set_text(colorNameLabel, torchColorNames[torchColorIndex]);
+    lv_obj_set_style_text_color(colorNameLabel, lv_color_hex(torchColors[torchColorIndex]), 0);
+    lv_obj_set_style_text_font(colorNameLabel, &lv_font_montserrat_18, 0);
+    lv_obj_align(colorNameLabel, LV_ALIGN_TOP_MID, 0, 240);
+    
+    // Hint
+    lv_obj_t *hintLabel = lv_label_create(card);
+    lv_label_set_text(hintLabel, "Tap screen to adjust");
+    lv_obj_set_style_text_color(hintLabel, lv_color_hex(0x3A3A3C), 0);
+    lv_obj_set_style_text_font(hintLabel, &lv_font_montserrat_10, 0);
+    lv_obj_align(hintLabel, LV_ALIGN_BOTTOM_MID, 0, -40);
+    
+    createMiniStatusBar(card);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  IMPROVED STOPWATCH CARD WITH LAPS
+// ═══════════════════════════════════════════════════════════════════════════════
+void createStopwatchCardImproved() {
+    GradientTheme &theme = gradientThemes[userData.themeIndex];
+    
+    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0C), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 28, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    
+    // Title
+    lv_obj_t *titleLabel = lv_label_create(card);
+    lv_label_set_text(titleLabel, "STOPWATCH");
+    lv_obj_set_style_text_color(titleLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 16, 16);
+    
+    // Calculate elapsed time
+    unsigned long elapsed = stopwatchElapsedMs;
+    if (stopwatchRunning) {
+        elapsed += (millis() - stopwatchStartMs);
+    }
+    
+    unsigned long mins = (elapsed / 60000) % 60;
+    unsigned long secs = (elapsed / 1000) % 60;
+    unsigned long ms = (elapsed % 1000) / 10;
+    
+    // Time display
+    char timeBuf[16];
+    snprintf(timeBuf, sizeof(timeBuf), "%02lu:%02lu", mins, secs);
+    lv_obj_t *timeLabel = lv_label_create(card);
+    lv_label_set_text(timeLabel, timeBuf);
+    lv_obj_set_style_text_color(timeLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(timeLabel, &lv_font_montserrat_48, 0);
+    lv_obj_align(timeLabel, LV_ALIGN_TOP_MID, 0, 40);
+    
+    // Milliseconds
+    char msBuf[8];
+    snprintf(msBuf, sizeof(msBuf), ".%02lu", ms);
+    lv_obj_t *msLabel = lv_label_create(card);
+    lv_label_set_text(msLabel, msBuf);
+    lv_obj_set_style_text_color(msLabel, theme.accent, 0);
+    lv_obj_set_style_text_font(msLabel, &lv_font_montserrat_24, 0);
+    lv_obj_align(msLabel, LV_ALIGN_TOP_MID, 75, 55);
+    
+    // Status indicator
+    lv_obj_t *statusDot = lv_obj_create(card);
+    lv_obj_set_size(statusDot, 12, 12);
+    lv_obj_align(statusDot, LV_ALIGN_TOP_MID, -80, 60);
+    lv_obj_set_style_bg_color(statusDot, stopwatchRunning ? lv_color_hex(0x30D158) : lv_color_hex(0xFF453A), 0);
+    lv_obj_set_style_radius(statusDot, 6, 0);
+    lv_obj_set_style_border_width(statusDot, 0, 0);
+    
+    // Lap list area
+    lv_obj_t *lapContainer = lv_obj_create(card);
+    lv_obj_set_size(lapContainer, LCD_WIDTH - 60, 140);
+    lv_obj_align(lapContainer, LV_ALIGN_CENTER, 0, 40);
+    lv_obj_set_style_bg_color(lapContainer, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_radius(lapContainer, 16, 0);
+    lv_obj_set_style_border_width(lapContainer, 0, 0);
+    lv_obj_set_style_pad_all(lapContainer, 8, 0);
+    lv_obj_set_flex_flow(lapContainer, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(lapContainer, 4, 0);
+    
+    if (lapCount == 0) {
+        lv_obj_t *noLapsLabel = lv_label_create(lapContainer);
+        lv_label_set_text(noLapsLabel, "No laps recorded");
+        lv_obj_set_style_text_color(noLapsLabel, lv_color_hex(0x636366), 0);
+        lv_obj_set_style_text_font(noLapsLabel, &lv_font_montserrat_12, 0);
+        lv_obj_center(noLapsLabel);
+    } else {
+        // Show last 4 laps (most recent first)
+        int startLap = lapCount > 4 ? lapCount - 4 : 0;
+        for (int i = lapCount - 1; i >= startLap; i--) {
+            lv_obj_t *lapRow = lv_obj_create(lapContainer);
+            lv_obj_set_size(lapRow, LCD_WIDTH - 80, 28);
+            lv_obj_set_style_bg_opa(lapRow, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(lapRow, 0, 0);
+            lv_obj_set_style_pad_all(lapRow, 0, 0);
+            
+            // Lap number
+            char lapNumBuf[8];
+            snprintf(lapNumBuf, sizeof(lapNumBuf), "Lap %d", i + 1);
+            lv_obj_t *lapNumLabel = lv_label_create(lapRow);
+            lv_label_set_text(lapNumLabel, lapNumBuf);
+            lv_obj_set_style_text_color(lapNumLabel, lv_color_hex(0x636366), 0);
+            lv_obj_set_style_text_font(lapNumLabel, &lv_font_montserrat_12, 0);
+            lv_obj_align(lapNumLabel, LV_ALIGN_LEFT_MID, 0, 0);
+            
+            // Lap time
+            unsigned long lt = lapTimes[i];
+            char lapTimeBuf[16];
+            snprintf(lapTimeBuf, sizeof(lapTimeBuf), "%02lu:%02lu.%02lu", 
+                     (lt / 60000) % 60, (lt / 1000) % 60, (lt % 1000) / 10);
+            lv_obj_t *lapTimeLabel = lv_label_create(lapRow);
+            lv_label_set_text(lapTimeLabel, lapTimeBuf);
+            lv_obj_set_style_text_color(lapTimeLabel, theme.accent, 0);
+            lv_obj_set_style_text_font(lapTimeLabel, &lv_font_montserrat_12, 0);
+            lv_obj_align(lapTimeLabel, LV_ALIGN_CENTER, 0, 0);
+            
+            // Total time
+            unsigned long tt = lapTotalTimes[i];
+            char totalTimeBuf[16];
+            snprintf(totalTimeBuf, sizeof(totalTimeBuf), "%02lu:%02lu", 
+                     (tt / 60000) % 60, (tt / 1000) % 60);
+            lv_obj_t *totalTimeLabel = lv_label_create(lapRow);
+            lv_label_set_text(totalTimeLabel, totalTimeBuf);
+            lv_obj_set_style_text_color(totalTimeLabel, lv_color_hex(0x636366), 0);
+            lv_obj_set_style_text_font(totalTimeLabel, &lv_font_montserrat_12, 0);
+            lv_obj_align(totalTimeLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+        }
+    }
+    
+    // Lap count indicator
+    char lapCountBuf[16];
+    snprintf(lapCountBuf, sizeof(lapCountBuf), "%d laps", lapCount);
+    lv_obj_t *lapCountLabel = lv_label_create(card);
+    lv_label_set_text(lapCountLabel, lapCountBuf);
+    lv_obj_set_style_text_color(lapCountLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(lapCountLabel, &lv_font_montserrat_10, 0);
+    lv_obj_align(lapCountLabel, LV_ALIGN_BOTTOM_MID, 0, -40);
+    
+    createMiniStatusBar(card);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  IMPROVED WEATHER CARD WITH VISUAL ICONS
+// ═══════════════════════════════════════════════════════════════════════════════
+void createWeatherCardImproved() {
+    GradientTheme &theme = gradientThemes[userData.themeIndex];
+    
+    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0C), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 28, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    
+    // Title with city
+    char titleBuf[32];
+    snprintf(titleBuf, sizeof(titleBuf), "%s, %s", weatherCity, weatherCountry);
+    lv_obj_t *titleLabel = lv_label_create(card);
+    lv_label_set_text(titleLabel, titleBuf);
+    lv_obj_set_style_text_color(titleLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 16, 16);
+    
+    // Weather icon (large)
+    lv_obj_t *iconContainer = lv_obj_create(card);
+    lv_obj_set_size(iconContainer, 80, 80);
+    lv_obj_align(iconContainer, LV_ALIGN_TOP_MID, -50, 45);
+    lv_obj_set_style_bg_opa(iconContainer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(iconContainer, 0, 0);
+    
+    // Determine icon based on weather description
+    const char* weatherIcon = "?";
+    lv_color_t iconColor = lv_color_hex(0xFFD700);  // Default: sun yellow
+    
+    String descLower = weatherDesc;
+    descLower.toLowerCase();
+    
+    if (descLower.indexOf("sun") >= 0 || descLower.indexOf("clear") >= 0) {
+        weatherIcon = "O";  // Sun symbol
+        iconColor = lv_color_hex(0xFFD700);
+    } else if (descLower.indexOf("cloud") >= 0) {
+        weatherIcon = "C";
+        iconColor = lv_color_hex(0x8E8E93);
+    } else if (descLower.indexOf("rain") >= 0) {
+        weatherIcon = "R";
+        iconColor = lv_color_hex(0x0A84FF);
+    } else if (descLower.indexOf("storm") >= 0 || descLower.indexOf("thunder") >= 0) {
+        weatherIcon = "S";
+        iconColor = lv_color_hex(0xFFD60A);
+    } else if (descLower.indexOf("snow") >= 0) {
+        weatherIcon = "*";
+        iconColor = lv_color_hex(0xFFFFFF);
+    }
+    
+    lv_obj_t *iconLabel = lv_label_create(iconContainer);
+    lv_label_set_text(iconLabel, weatherIcon);
+    lv_obj_set_style_text_color(iconLabel, iconColor, 0);
+    lv_obj_set_style_text_font(iconLabel, &lv_font_montserrat_48, 0);
+    lv_obj_center(iconLabel);
+    
+    // Temperature (large)
+    char tempBuf[16];
+    snprintf(tempBuf, sizeof(tempBuf), "%.0f°", weatherTemp);
+    lv_obj_t *tempLabel = lv_label_create(card);
+    lv_label_set_text(tempLabel, tempBuf);
+    lv_obj_set_style_text_color(tempLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(tempLabel, &lv_font_montserrat_48, 0);
+    lv_obj_align(tempLabel, LV_ALIGN_TOP_MID, 40, 60);
+    
+    // Description
+    lv_obj_t *descLabel = lv_label_create(card);
+    lv_label_set_text(descLabel, weatherDesc.c_str());
+    lv_obj_set_style_text_color(descLabel, theme.accent, 0);
+    lv_obj_set_style_text_font(descLabel, &lv_font_montserrat_18, 0);
+    lv_obj_align(descLabel, LV_ALIGN_CENTER, 0, 30);
+    
+    // High/Low container
+    lv_obj_t *hlContainer = lv_obj_create(card);
+    lv_obj_set_size(hlContainer, LCD_WIDTH - 80, 50);
+    lv_obj_align(hlContainer, LV_ALIGN_CENTER, 0, 80);
+    lv_obj_set_style_bg_color(hlContainer, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_radius(hlContainer, 12, 0);
+    lv_obj_set_style_border_width(hlContainer, 0, 0);
+    
+    // High temp
+    char highBuf[16];
+    snprintf(highBuf, sizeof(highBuf), "H: %.0f°", weatherHigh);
+    lv_obj_t *highLabel = lv_label_create(hlContainer);
+    lv_label_set_text(highLabel, highBuf);
+    lv_obj_set_style_text_color(highLabel, lv_color_hex(0xFF453A), 0);
+    lv_obj_set_style_text_font(highLabel, &lv_font_montserrat_18, 0);
+    lv_obj_align(highLabel, LV_ALIGN_LEFT_MID, 20, 0);
+    
+    // Low temp
+    char lowBuf[16];
+    snprintf(lowBuf, sizeof(lowBuf), "L: %.0f°", weatherLow);
+    lv_obj_t *lowLabel = lv_label_create(hlContainer);
+    lv_label_set_text(lowLabel, lowBuf);
+    lv_obj_set_style_text_color(lowLabel, lv_color_hex(0x0A84FF), 0);
+    lv_obj_set_style_text_font(lowLabel, &lv_font_montserrat_18, 0);
+    lv_obj_align(lowLabel, LV_ALIGN_RIGHT_MID, -20, 0);
+    
+    createMiniStatusBar(card);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CALCULATOR CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+void createCalculatorCard() {
+    GradientTheme &theme = gradientThemes[userData.themeIndex];
+    
+    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0C), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 28, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    
+    // Title
+    lv_obj_t *titleLabel = lv_label_create(card);
+    lv_label_set_text(titleLabel, "CALCULATOR");
+    lv_obj_set_style_text_color(titleLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 16, 16);
+    
+    // Display
+    lv_obj_t *display = lv_obj_create(card);
+    lv_obj_set_size(display, LCD_WIDTH - 60, 60);
+    lv_obj_align(display, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_set_style_bg_color(display, lv_color_hex(0x1C1C1E), 0);
+    lv_obj_set_style_radius(display, 12, 0);
+    lv_obj_set_style_border_width(display, 0, 0);
+    
+    lv_obj_t *displayLabel = lv_label_create(display);
+    lv_label_set_text(displayLabel, calcDisplay);
+    lv_obj_set_style_text_color(displayLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(displayLabel, &lv_font_montserrat_28, 0);
+    lv_obj_align(displayLabel, LV_ALIGN_RIGHT_MID, -16, 0);
+    
+    // Button grid - simplified visual (actual interaction via touch regions)
+    const char* buttons[] = {
+        "C", "+/-", "%", "/",
+        "7", "8", "9", "x",
+        "4", "5", "6", "-",
+        "1", "2", "3", "+",
+        "0", "0", ".", "="
+    };
+    
+    int btnSize = 55;
+    int startY = 115;
+    int cols = 4;
+    int spacing = 8;
+    int totalWidth = cols * btnSize + (cols - 1) * spacing;
+    int startX = (LCD_WIDTH - 24 - totalWidth) / 2;
+    
+    for (int row = 0; row < 5; row++) {
+        for (int col = 0; col < 4; col++) {
+            int idx = row * 4 + col;
+            if (idx >= 20) break;
+            
+            // Skip duplicate 0
+            if (row == 4 && col == 1) continue;
+            
+            lv_obj_t *btn = lv_obj_create(card);
+            
+            int btnW = (row == 4 && col == 0) ? btnSize * 2 + spacing : btnSize;
+            
+            lv_obj_set_size(btn, btnW, btnSize);
+            lv_obj_align(btn, LV_ALIGN_TOP_LEFT, startX + col * (btnSize + spacing), startY + row * (btnSize + spacing));
+            
+            // Color coding
+            lv_color_t btnColor;
+            lv_color_t txtColor = lv_color_hex(0xFFFFFF);
+            
+            if (col == 3) {  // Operators
+                btnColor = theme.accent;
+            } else if (row == 0 && col < 3) {  // Top row functions
+                btnColor = lv_color_hex(0x636366);
+                txtColor = lv_color_hex(0x000000);
+            } else if (buttons[idx][0] == '=') {
+                btnColor = lv_color_hex(0x30D158);
+            } else {
+                btnColor = lv_color_hex(0x2C2C2E);
+            }
+            
+            lv_obj_set_style_bg_color(btn, btnColor, 0);
+            lv_obj_set_style_radius(btn, btnSize / 2, 0);
+            lv_obj_set_style_border_width(btn, 0, 0);
+            
+            lv_obj_t *label = lv_label_create(btn);
+            lv_label_set_text(label, buttons[idx]);
+            lv_obj_set_style_text_color(label, txtColor, 0);
+            lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
+            lv_obj_center(label);
+        }
+    }
+    
+    createMiniStatusBar(card);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CLICKER CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+void createClickerCard() {
+    GradientTheme &theme = gradientThemes[userData.themeIndex];
+    
+    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0C), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 28, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    
+    // Title
+    lv_obj_t *titleLabel = lv_label_create(card);
+    lv_label_set_text(titleLabel, "CLICKER");
+    lv_obj_set_style_text_color(titleLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 16, 16);
+    
+    // Count display
+    char countBuf[16];
+    snprintf(countBuf, sizeof(countBuf), "%lu", clickerCount);
+    lv_obj_t *countLabel = lv_label_create(card);
+    lv_label_set_text(countLabel, countBuf);
+    lv_obj_set_style_text_color(countLabel, theme.accent, 0);
+    lv_obj_set_style_text_font(countLabel, &lv_font_montserrat_48, 0);
+    lv_obj_align(countLabel, LV_ALIGN_CENTER, 0, -60);
+    
+    // Click button (large)
+    lv_obj_t *clickBtn = lv_obj_create(card);
+    lv_obj_set_size(clickBtn, 140, 140);
+    lv_obj_align(clickBtn, LV_ALIGN_CENTER, 0, 30);
+    lv_obj_set_style_bg_color(clickBtn, theme.accent, 0);
+    lv_obj_set_style_radius(clickBtn, 70, 0);
+    lv_obj_set_style_border_width(clickBtn, 0, 0);
+    lv_obj_set_style_shadow_width(clickBtn, 20, 0);
+    lv_obj_set_style_shadow_color(clickBtn, theme.accent, 0);
+    lv_obj_set_style_shadow_opa(clickBtn, LV_OPA_30, 0);
+    
+    lv_obj_t *clickLabel = lv_label_create(clickBtn);
+    lv_label_set_text(clickLabel, "TAP");
+    lv_obj_set_style_text_color(clickLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(clickLabel, &lv_font_montserrat_24, 0);
+    lv_obj_center(clickLabel);
+    
+    // Reset hint
+    lv_obj_t *resetLabel = lv_label_create(card);
+    lv_label_set_text(resetLabel, "Hold to reset");
+    lv_obj_set_style_text_color(resetLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(resetLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(resetLabel, LV_ALIGN_BOTTOM_MID, 0, -40);
+    
+    createMiniStatusBar(card);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  REACTION TEST CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+void createReactionTestCard() {
+    GradientTheme &theme = gradientThemes[userData.themeIndex];
+    
+    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    
+    // Background color depends on state
+    lv_color_t bgColor;
+    const char* statusText;
+    const char* instructionText;
+    
+    if (reactionTooEarly) {
+        bgColor = lv_color_hex(0xFF453A);  // Red - too early
+        statusText = "TOO EARLY!";
+        instructionText = "Tap to try again";
+    } else if (reactionWaiting) {
+        bgColor = lv_color_hex(0x30D158);  // Green - TAP NOW!
+        statusText = "TAP NOW!";
+        instructionText = "";
+    } else if (reactionTestActive) {
+        bgColor = lv_color_hex(0xFF9F0A);  // Orange - wait
+        statusText = "WAIT...";
+        instructionText = "Wait for green";
+    } else {
+        bgColor = lv_color_hex(0x0A0A0C);  // Dark - ready
+        statusText = "REACTION TEST";
+        instructionText = "Tap to start";
+    }
+    
+    lv_obj_set_style_bg_color(card, bgColor, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 28, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    
+    // Status text
+    lv_obj_t *statusLabel = lv_label_create(card);
+    lv_label_set_text(statusLabel, statusText);
+    lv_obj_set_style_text_color(statusLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(statusLabel, &lv_font_montserrat_24, 0);
+    lv_obj_align(statusLabel, LV_ALIGN_CENTER, 0, -40);
+    
+    // Last reaction time
+    if (lastReactionTime > 0 && !reactionTestActive && !reactionWaiting && !reactionTooEarly) {
+        char timeBuf[32];
+        snprintf(timeBuf, sizeof(timeBuf), "Last: %lu ms", lastReactionTime);
+        lv_obj_t *lastLabel = lv_label_create(card);
+        lv_label_set_text(lastLabel, timeBuf);
+        lv_obj_set_style_text_color(lastLabel, theme.accent, 0);
+        lv_obj_set_style_text_font(lastLabel, &lv_font_montserrat_28, 0);
+        lv_obj_align(lastLabel, LV_ALIGN_CENTER, 0, 10);
+        
+        // Best time
+        char bestBuf[32];
+        snprintf(bestBuf, sizeof(bestBuf), "Best: %lu ms", bestReactionTime < 9999 ? bestReactionTime : 0);
+        lv_obj_t *bestLabel = lv_label_create(card);
+        lv_label_set_text(bestLabel, bestBuf);
+        lv_obj_set_style_text_color(bestLabel, lv_color_hex(0x636366), 0);
+        lv_obj_set_style_text_font(bestLabel, &lv_font_montserrat_14, 0);
+        lv_obj_align(bestLabel, LV_ALIGN_CENTER, 0, 50);
+    }
+    
+    // Instruction
+    if (strlen(instructionText) > 0) {
+        lv_obj_t *instrLabel = lv_label_create(card);
+        lv_label_set_text(instrLabel, instructionText);
+        lv_obj_set_style_text_color(instrLabel, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(instrLabel, &lv_font_montserrat_14, 0);
+        lv_obj_align(instrLabel, LV_ALIGN_CENTER, 0, 80);
+    }
+    
+    if (!reactionTestActive && !reactionWaiting && !reactionTooEarly) {
+        createMiniStatusBar(card);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DAILY CHALLENGE CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+void generateChallenge() {
+    challengeType = random(0, 3);  // 0=Math, 1=Memory, 2=Trivia
+    challengeAnswered = false;
+    challengeCorrect = false;
+    
+    if (challengeType == 0) {  // Math
+        int a = random(1, 20);
+        int b = random(1, 20);
+        int op = random(0, 4);
+        
+        switch(op) {
+            case 0: challengeAnswer = a + b; challengeQuestion = a * 1000 + b; break;  // +
+            case 1: challengeAnswer = a - b; challengeQuestion = a * 1000 + b + 100000; break;  // -
+            case 2: challengeAnswer = a * b; challengeQuestion = a * 1000 + b + 200000; break;  // *
+            case 3: challengeAnswer = a; challengeQuestion = (a * b) * 1000 + b + 300000; break;  // / (a*b / b = a)
+        }
+    } else {
+        // Trivia - simple general knowledge
+        challengeQuestion = random(0, 5);
+        challengeAnswer = challengeQuestion;  // Answer index matches question index
+    }
+    
+    // Generate options
+    challengeCorrectIndex = random(0, 4);
+    for (int i = 0; i < 4; i++) {
+        if (i == challengeCorrectIndex) {
+            challengeOptions[i] = challengeAnswer;
+        } else {
+            challengeOptions[i] = challengeAnswer + random(-10, 10);
+            if (challengeOptions[i] == challengeAnswer) challengeOptions[i] += (i + 1);
+        }
+    }
+}
+
+void createDailyChallengeCard() {
+    GradientTheme &theme = gradientThemes[userData.themeIndex];
+    
+    // Generate new challenge if needed
+    static bool challengeGenerated = false;
+    if (!challengeGenerated || challengeAnswered) {
+        generateChallenge();
+        challengeGenerated = true;
+    }
+    
+    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x0A0A0C), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 28, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    
+    // Title
+    const char* typeNames[] = {"MATH", "MEMORY", "TRIVIA"};
+    lv_obj_t *titleLabel = lv_label_create(card);
+    lv_label_set_text(titleLabel, typeNames[challengeType]);
+    lv_obj_set_style_text_color(titleLabel, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(titleLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 16, 16);
+    
+    // Score
+    char scoreBuf[16];
+    snprintf(scoreBuf, sizeof(scoreBuf), "Score: %d", challengeScore);
+    lv_obj_t *scoreLabel = lv_label_create(card);
+    lv_label_set_text(scoreLabel, scoreBuf);
+    lv_obj_set_style_text_color(scoreLabel, theme.accent, 0);
+    lv_obj_set_style_text_font(scoreLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(scoreLabel, LV_ALIGN_TOP_RIGHT, -16, 16);
+    
+    // Question
+    char questionBuf[64];
+    if (challengeType == 0) {  // Math
+        int a = (challengeQuestion % 100000) / 1000;
+        int b = challengeQuestion % 1000;
+        int opCode = challengeQuestion / 100000;
+        const char* ops[] = {"+", "-", "x", "/"};
+        
+        if (opCode == 3) {
+            snprintf(questionBuf, sizeof(questionBuf), "%d / %d = ?", a * b, b);
+        } else {
+            snprintf(questionBuf, sizeof(questionBuf), "%d %s %d = ?", a, ops[opCode], b);
+        }
+    } else {
+        const char* triviaQuestions[] = {
+            "Days in a week?",
+            "Legs on a spider?",
+            "Planets in solar system?",
+            "Months in a year?",
+            "Hours in a day?"
+        };
+        int triviaAnswers[] = {7, 8, 8, 12, 24};
+        snprintf(questionBuf, sizeof(questionBuf), "%s", triviaQuestions[challengeQuestion % 5]);
+        challengeAnswer = triviaAnswers[challengeQuestion % 5];
+        challengeOptions[challengeCorrectIndex] = challengeAnswer;
+    }
+    
+    lv_obj_t *questionLabel = lv_label_create(card);
+    lv_label_set_text(questionLabel, questionBuf);
+    lv_obj_set_style_text_color(questionLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(questionLabel, &lv_font_montserrat_20, 0);
+    lv_obj_align(questionLabel, LV_ALIGN_TOP_MID, 0, 50);
+    
+    // Answer options (2x2 grid)
+    int btnW = (LCD_WIDTH - 80) / 2;
+    int btnH = 50;
+    int startY = 100;
+    
+    for (int i = 0; i < 4; i++) {
+        int row = i / 2;
+        int col = i % 2;
+        
+        lv_obj_t *btn = lv_obj_create(card);
+        lv_obj_set_size(btn, btnW, btnH);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 25 + col * (btnW + 10), startY + row * (btnH + 10));
+        
+        lv_color_t btnColor = lv_color_hex(0x2C2C2E);
+        if (challengeAnswered) {
+            if (i == challengeCorrectIndex) {
+                btnColor = lv_color_hex(0x30D158);  // Green for correct
+            } else if (challengeOptions[i] == challengeAnswer - 1) {  // Wrong selection
+                btnColor = lv_color_hex(0xFF453A);  // Red for wrong
+            }
+        }
+        
+        lv_obj_set_style_bg_color(btn, btnColor, 0);
+        lv_obj_set_style_radius(btn, 12, 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        
+        char optBuf[16];
+        snprintf(optBuf, sizeof(optBuf), "%d", challengeOptions[i]);
+        lv_obj_t *optLabel = lv_label_create(btn);
+        lv_label_set_text(optLabel, optBuf);
+        lv_obj_set_style_text_color(optLabel, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(optLabel, &lv_font_montserrat_20, 0);
+        lv_obj_center(optLabel);
+    }
+    
+    // Result message
+    if (challengeAnswered) {
+        lv_obj_t *resultLabel = lv_label_create(card);
+        lv_label_set_text(resultLabel, challengeCorrect ? "Correct!" : "Wrong!");
+        lv_obj_set_style_text_color(resultLabel, challengeCorrect ? lv_color_hex(0x30D158) : lv_color_hex(0xFF453A), 0);
+        lv_obj_set_style_text_font(resultLabel, &lv_font_montserrat_24, 0);
+        lv_obj_align(resultLabel, LV_ALIGN_CENTER, 0, 80);
+        
+        lv_obj_t *nextLabel = lv_label_create(card);
+        lv_label_set_text(nextLabel, "Tap for next");
+        lv_obj_set_style_text_color(nextLabel, lv_color_hex(0x636366), 0);
+        lv_obj_set_style_text_font(nextLabel, &lv_font_montserrat_12, 0);
+        lv_obj_align(nextLabel, LV_ALIGN_CENTER, 0, 110);
+    }
+    
+    createMiniStatusBar(card);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  STEP DETECTION
@@ -2302,6 +3374,24 @@ void loop() {
             navigateTo(CAT_COMPASS, subIndex);
         }
     }
+    // Reaction test timer
+    if (reactionTestActive && !reactionWaiting && !reactionTooEarly) {
+        if (millis() - reactionStartMs >= reactionDelayMs) {
+            reactionWaiting = true;
+            reactionStartMs = millis();  // Reset for reaction timing
+            navigateTo(mainIndex, subIndex);
+        }
+    }
+    
+    // World clock refresh
+    if (screenOn && mainIndex == CAT_CLOCK && subIndex >= 2) {
+        static unsigned long lastWorldClockRefresh = 0;
+        if (millis() - lastWorldClockRefresh >= 1000) {
+            lastWorldClockRefresh = millis();
+            navigateTo(CAT_CLOCK, subIndex);
+        }
+    }
+
 
     delay(5);
 }
