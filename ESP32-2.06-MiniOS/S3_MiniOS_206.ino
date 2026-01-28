@@ -76,6 +76,12 @@
 #include <Preferences.h>
 #include <esp_sleep.h>
 
+// Wallpaper images
+#include "AdobeStock_175570428_Preview.c"
+#include "AdobeStock_202686293_Preview.c"
+#include "AdobeStock_1848694465_Preview.c"
+#include "AdobeStock_1745641257_Preview.c"
+
 // 
 //  USB SERIAL COMPATIBILITY FIX
 //  Fix for 'USBSerial' not declared error - handles different board configs
@@ -645,6 +651,7 @@ void fetchWeatherData();
 void fetchCryptoData();
 void updateSensorFusion();
 void calibrateCompass();
+void displayWallpaperImage(lv_obj_t *parent, int wallpaperIndex);
 
 // Identity system functions
 void trackStopwatchUse();
@@ -912,6 +919,15 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
             }
             navigateTo(currentCategory, currentSubCard);
         }
+        else if (currentCategory == CAT_SETTINGS && currentSubCard == 0) {
+            // Settings - wallpaper cycling tap area (y: 390-470)
+            if (touchCurrentY >= 402 && touchCurrentY <= 482) {
+                // Cycle through wallpapers (0-4)
+                userData.wallpaperIndex = (userData.wallpaperIndex + 1) % 5;
+                saveUserData();
+                navigateTo(currentCategory, currentSubCard);
+            }
+        }
       }
     }
   }
@@ -940,6 +956,42 @@ void screenOnFunc() {
     lastActivityMs = millis();
     gfx->setBrightness(batterySaverMode ? 100 : userData.brightness);
     navigateTo(currentCategory, currentSubCard);
+}
+
+//
+//  WALLPAPER IMAGE DISPLAY FUNCTION
+//
+void displayWallpaperImage(lv_obj_t *parent, int wallpaperIndex) {
+    if (wallpaperIndex == 0) {
+        // Solid color - use current gradient theme
+        return;
+    }
+    
+    // Create image object
+    lv_obj_t *img = lv_img_create(parent);
+    
+    // Set image source based on wallpaperIndex
+    switch(wallpaperIndex) {
+        case 1:
+            lv_img_set_src(img, &AdobeStock_175570428_Preview);
+            break;
+        case 2:
+            lv_img_set_src(img, &AdobeStock_202686293_Preview);
+            break;
+        case 3:
+            lv_img_set_src(img, &AdobeStock_1848694465_Preview);
+            break;
+        case 4:
+            lv_img_set_src(img, &AdobeStock_1745641257_Preview);
+            break;
+        default:
+            lv_obj_del(img);
+            return;
+    }
+    
+    // Position image to cover card
+    lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_size(img, LCD_WIDTH - 24, LCD_HEIGHT - 60);
 }
 
 void shutdownDevice() {
@@ -988,11 +1040,15 @@ void startTransition(int direction) {
 void checkTransitionTimeout() {
     if (isTransitioning && (millis() - transitionStartMs > TRANSITION_DURATION + 200)) {
         // Force end transition if it's stuck
+        USBSerial.println("[NAV] WARNING: Transition timeout - force unlocking");
         isTransitioning = false;
         navigationLocked = false;
+        lastNavigationMs = millis();  // Update timestamp to prevent immediate re-trigger
     }
     // Also unlock navigation after cooldown
-    if (navigationLocked && !isTransitioning && (millis() - lastNavigationMs > NAVIGATION_COOLDOWN_MS)) {
+    if (navigationLocked && !isTransitioning && (millis() - lastNavigationMs > NAVIGATION_COOLDOWN_MS + 100)) {
+        // Extra 100ms grace period to ensure proper unlock
+        USBSerial.println("[NAV] Auto-unlocking navigation after cooldown");
         navigationLocked = false;
     }
 }
@@ -2084,6 +2140,11 @@ void navigateTo(int category, int subCard) {
         subCard = 0;
     }
     
+    // FIX: Unlock at the START to prevent permanent lock if function fails
+    // This ensures even if something goes wrong below, navigation won't be permanently locked
+    navigationLocked = false;
+    isTransitioning = false;
+    
     // Update state
     currentCategory = category;
     currentSubCard = subCard;
@@ -2197,10 +2258,25 @@ void navigateTo(int category, int subCard) {
 void createClockCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
-    // Main card container
-    lv_obj_t *card = lv_obj_create(lv_scr_act());
+    // Background card for wallpaper
+    lv_obj_t *bgCard = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(bgCard, LCD_WIDTH - 24, LCD_HEIGHT - 60);
+    lv_obj_align(bgCard, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_set_style_bg_color(bgCard, theme.color1, 0);
+    lv_obj_set_style_bg_grad_color(bgCard, theme.color2, 0);
+    lv_obj_set_style_bg_grad_dir(bgCard, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_radius(bgCard, 28, 0);
+    lv_obj_set_style_border_width(bgCard, 0, 0);
+    
+    // Apply wallpaper if selected
+    if (userData.wallpaperIndex > 0) {
+        displayWallpaperImage(bgCard, userData.wallpaperIndex);
+    }
+    
+    // Main card container (transparent, sits on top)
+    lv_obj_t *card = lv_obj_create(bgCard);
     lv_obj_set_size(card, LCD_WIDTH - 24, LCD_HEIGHT - 60);
-    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(card, 0, 0);
     lv_obj_set_scrollbar_mode(card, LV_SCROLLBAR_MODE_OFF);
@@ -4563,6 +4639,33 @@ void createSettingsCard() {
     if (batterySaverMode) lv_obj_add_state(saverSwitch, LV_STATE_CHECKED);
     lv_obj_set_style_bg_color(saverSwitch, lv_color_hex(0x3A3A3C), LV_PART_MAIN);
     lv_obj_set_style_bg_color(saverSwitch, lv_color_hex(0xFF9F0A), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    
+    // Wallpaper selector with TAP functionality
+    lv_obj_t *wallpaperContainer = lv_obj_create(card);
+    lv_obj_set_size(wallpaperContainer, LCD_WIDTH - 70, 80);
+    lv_obj_align(wallpaperContainer, LV_ALIGN_TOP_MID, 0, 240);
+    lv_obj_set_style_bg_color(wallpaperContainer, lv_color_hex(0x2C2C2E), 0);
+    lv_obj_set_style_radius(wallpaperContainer, 15, 0);
+    lv_obj_set_style_border_width(wallpaperContainer, 0, 0);
+
+    lv_obj_t *wallpaperLabel = lv_label_create(wallpaperContainer);
+    lv_label_set_text(wallpaperLabel, "Wallpaper");
+    lv_obj_set_style_text_color(wallpaperLabel, theme.text, 0);
+    lv_obj_align(wallpaperLabel, LV_ALIGN_TOP_LEFT, 15, 12);
+
+    // Show current wallpaper name
+    lv_obj_t *wallpaperValue = lv_label_create(wallpaperContainer);
+    const char* wallpaperNames[] = {"Solid Color", "Mountain 1", "Mountain 2", "Mountain 3", "Mountain 4"};
+    lv_label_set_text(wallpaperValue, wallpaperNames[userData.wallpaperIndex]);
+    lv_obj_set_style_text_color(wallpaperValue, theme.accent, 0);
+    lv_obj_align(wallpaperValue, LV_ALIGN_BOTTOM_RIGHT, -15, -12);
+
+    // TAP indicator
+    lv_obj_t *tapHint = lv_label_create(wallpaperContainer);
+    lv_label_set_text(tapHint, "TAP TO CHANGE");
+    lv_obj_set_style_text_color(tapHint, lv_color_hex(0x636366), 0);
+    lv_obj_set_style_text_font(tapHint, &lv_font_montserrat_10, 0);
+    lv_obj_align(tapHint, LV_ALIGN_TOP_RIGHT, -15, 12);
     
     createMiniStatusBar(card);
 }
@@ -7214,8 +7317,8 @@ void loop() {
         checkLowBattery();
         
         // Refresh system card if visible (SAFE)
+        // FIX: Don't lock before calling navigateTo - it handles locking internally
         if (screenOn && currentCategory == CAT_SYSTEM && canNavigate()) {
-            navigationLocked = true;
             navigateTo(CAT_SYSTEM, currentSubCard);
         }
     }
@@ -7318,7 +7421,7 @@ void loop() {
         static unsigned long lastClockRefresh = 0;
         if (millis() - lastClockRefresh >= 1000) {
             lastClockRefresh = millis();
-            navigationLocked = true;
+            // FIX: Don't lock before calling navigateTo - it handles locking internally
             navigateTo(CAT_CLOCK, currentSubCard);
         }
     }
@@ -7329,7 +7432,7 @@ void loop() {
         static unsigned long lastCompassRefresh = 0;
         if (millis() - lastCompassRefresh >= 200) {  // 5Hz refresh (FIX 2 - v4.1)
             lastCompassRefresh = millis();
-            navigationLocked = true;
+            // FIX: Don't lock before calling navigateTo - it handles locking internally
             navigateTo(CAT_COMPASS, currentSubCard);
         }
     }
@@ -7339,7 +7442,7 @@ void loop() {
         static unsigned long lastDinoRefresh = 0;
         if (millis() - lastDinoRefresh >= 50) {  // 20 FPS for smooth animation
             lastDinoRefresh = millis();
-            navigationLocked = true;
+            // FIX: Don't lock before calling navigateTo - it handles locking internally
             navigateTo(CAT_GAMES, 1);
         }
     }
