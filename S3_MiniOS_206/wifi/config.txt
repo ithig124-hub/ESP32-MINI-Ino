@@ -1,0 +1,36 @@
+# ═══════════════════════════════════════════════════════
+# S3 MiniOS WiFi Configuration - MULTI-NETWORK SUPPORT
+# ═══════════════════════════════════════════════════════
+#
+# Add up to 5 WiFi networks. Watch will try each in order
+# until one connects successfully.
+#
+# FORMAT: Use WIFI1, WIFI2, WIFI3, etc. for multiple networks
+#
+# ─────────────────────────────────────────────────────────
+# NETWORK 1 (Primary - Home)
+# ─────────────────────────────────────────────────────────
+WIFI1_SSID=YourHomeNetwork
+WIFI1_PASS=YourHomePassword
+#
+# ─────────────────────────────────────────────────────────
+# NETWORK 2 (Secondary - Work)
+# ─────────────────────────────────────────────────────────
+WIFI2_SSID=YourWorkNetwork
+WIFI2_PASS=YourWorkPassword
+#
+# ─────────────────────────────────────────────────────────
+# NETWORK 3 (Optional - Mobile Hotspot)
+# ─────────────────────────────────────────────────────────
+#WIFI3_SSID=MyPhoneHotspot
+#WIFI3_PASS=HotspotPassword
+#
+# ─────────────────────────────────────────────────────────
+# GLOBAL SETTINGS
+# ─────────────────────────────────────────────────────────
+# Weather location (leave blank to auto-detect from IP)
+CITY=Perth
+COUNTRY=AU
+#
+# Timezone offset from GMT in hours
+GMT_OFFSET=8
