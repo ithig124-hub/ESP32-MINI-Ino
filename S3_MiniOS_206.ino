@@ -31,7 +31,7 @@
  *  - Mini battery estimate on all cards
  * 
  *  === FIXES APPLIED (v4.1) ===
- *   Power Button: Visual shutdown indicator (hold 5s)
+ *   Power Button: Visual shutdown indicator (hold 10s)
  *   Navigation: Fixed compass lock, reduced refresh to 5Hz
  *   NTP Sync: Enhanced logging, verified schedule
  *
@@ -347,7 +347,7 @@ lv_obj_t *notificationOverlay = NULL;  // Global pointer to prevent duplicate ov
 #define PWR_BUTTON      10      // Power button (GPIO10) - On/Off & Shutdown
 
 // Button timing constants - VERY conservative to prevent false triggers
-const unsigned long POWER_BUTTON_SHUTDOWN_MS = 5000;     // 5s CONFIRMED hold = shutdown
+const unsigned long POWER_BUTTON_SHUTDOWN_MS = 10000;    // 10s CONFIRMED hold = shutdown (prevents accidental shutdowns)
 const unsigned long POWER_BUTTON_DEBOUNCE_MS = 150;      // Long debounce to prevent noise
 const unsigned long POWER_BUTTON_MIN_TAP_MS = 100;       // Minimum tap duration
 const unsigned long POWER_BUTTON_CONFIRM_SAMPLES = 20;   // Require many samples to confirm
@@ -956,19 +956,34 @@ void startTransition(int direction) {
 }
 
 // Check if transition should be auto-completed (timeout protection)
+// FIX: More aggressive timeout to prevent freezing
 void checkTransitionTimeout() {
-    if (isTransitioning && (millis() - transitionStartMs > TRANSITION_DURATION + 200)) {
-        // Force end transition if it's stuck
+    unsigned long now = millis();
+    
+    // Force unlock if transition is stuck (reduced timeout for responsiveness)
+    if (isTransitioning && (now - transitionStartMs > TRANSITION_DURATION + 100)) {
         USBSerial.println("[NAV] WARNING: Transition timeout - force unlocking");
         isTransitioning = false;
         navigationLocked = false;
-        lastNavigationMs = millis();  // Update timestamp to prevent immediate re-trigger
+        lastNavigationMs = now;
     }
-    // Also unlock navigation after cooldown
-    if (navigationLocked && !isTransitioning && (millis() - lastNavigationMs > NAVIGATION_COOLDOWN_MS + 100)) {
-        // Extra 100ms grace period to ensure proper unlock
+    
+    // Auto-unlock navigation if stuck (safety net)
+    if (navigationLocked && !isTransitioning && (now - lastNavigationMs > NAVIGATION_COOLDOWN_MS + 50)) {
         USBSerial.println("[NAV] Auto-unlocking navigation after cooldown");
         navigationLocked = false;
+    }
+    
+    // CRITICAL FIX: Periodic safety reset every 500ms to prevent permanent freeze
+    static unsigned long lastSafetyCheck = 0;
+    if (now - lastSafetyCheck > 500) {
+        lastSafetyCheck = now;
+        // If we're supposedly transitioning but it's been way too long, force reset
+        if (isTransitioning && (now - transitionStartMs > 1000)) {
+            USBSerial.println("[NAV] CRITICAL: Force resetting stuck transition state");
+            isTransitioning = false;
+            navigationLocked = false;
+        }
     }
 }
 
@@ -984,6 +999,11 @@ void handleSwipe(int dx, int dy) {
     // SAFETY: Don't process swipes during transition animation
     if (isTransitioning) {
         USBSerial.println("[NAV] Swipe ignored - transition in progress");
+        // FIX: Force unlock after short delay to prevent permanent freeze
+        if (millis() - transitionStartMs > 300) {
+            isTransitioning = false;
+            navigationLocked = false;
+        }
         return;
     }
     
@@ -992,6 +1012,9 @@ void handleSwipe(int dx, int dy) {
         USBSerial.println("[NAV] Swipe ignored - cooldown active");
         return;
     }
+    
+    // FIX: Reset any stuck navigation state
+    navigationLocked = false;
     
     // Dismiss low battery popup first
     if (showingLowBatteryPopup) {
@@ -1096,6 +1119,11 @@ void handleSwipe(int dx, int dy) {
 void handleTap(int x, int y) {
     // Don't process taps during transitions
     if (isTransitioning) {
+        // FIX: Force unlock after short delay to prevent freeze
+        if (millis() - transitionStartMs > 300) {
+            isTransitioning = false;
+            navigationLocked = false;
+        }
         return;
     }
     
@@ -1103,6 +1131,9 @@ void handleTap(int x, int y) {
     if (millis() - lastNavigationMs < NAVIGATION_COOLDOWN_MS) {
         return;
     }
+    
+    // FIX: Reset any stuck state
+    navigationLocked = false;
     
     // === IMPROVED TAP-ON-SIDES NAVIGATION ===
     // INCREASED edge zones for easier navigation (70px on sides, 100px top/bottom)
@@ -2134,7 +2165,7 @@ lv_obj_t* createCard(const char* title, bool fullBg = false) {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
     
     lv_obj_t *card = lv_obj_create(lv_scr_act());
-    // MODIFIED: Use full screen size, remove top/bottom margins (no black header)
+    // CLEAN: Full screen, no margins, no overlays
     lv_obj_set_size(card, LCD_WIDTH, LCD_HEIGHT);
     lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
     
@@ -2148,36 +2179,18 @@ lv_obj_t* createCard(const char* title, bool fullBg = false) {
         lv_obj_set_style_bg_color(card, lv_color_hex(0x1C1C1E), 0);
     }
     
-    // MODIFIED: Use 0 radius for full screen look (no rounded corners at edges)
     lv_obj_set_style_radius(card, 0, 0);
     lv_obj_set_style_border_width(card, 0, 0);
-    // IMPROVED: Increased padding to avoid content overlapping with nav zones
-    lv_obj_set_style_pad_top(card, 20, 0);
-    lv_obj_set_style_pad_bottom(card, 110, 0);  // Extra space for bottom nav zone
-    lv_obj_set_style_pad_left(card, 20, 0);
-    lv_obj_set_style_pad_right(card, 20, 0);
-    lv_obj_set_style_shadow_width(card, 0, 0);  // No shadow for full screen
+    lv_obj_set_style_pad_top(card, 15, 0);
+    lv_obj_set_style_pad_bottom(card, 15, 0);
+    lv_obj_set_style_pad_left(card, 15, 0);
+    lv_obj_set_style_pad_right(card, 15, 0);
+    lv_obj_set_style_shadow_width(card, 0, 0);
     
-    // Prevent cards from being scrolled or moved out of frame
     lv_obj_set_style_clip_corner(card, true, 0);
     disableAllScrolling(card);
     
-    // IMPROVED: Add subtle navigation indicators on sides
-    lv_obj_t *leftNav = lv_obj_create(card);
-    lv_obj_set_size(leftNav, 4, 50);
-    lv_obj_align(leftNav, LV_ALIGN_LEFT_MID, -12, 0);
-    lv_obj_set_style_bg_color(leftNav, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(leftNav, LV_OPA_15, 0);
-    lv_obj_set_style_radius(leftNav, 2, 0);
-    lv_obj_set_style_border_width(leftNav, 0, 0);
-    
-    lv_obj_t *rightNav = lv_obj_create(card);
-    lv_obj_set_size(rightNav, 4, 50);
-    lv_obj_align(rightNav, LV_ALIGN_RIGHT_MID, 12, 0);
-    lv_obj_set_style_bg_color(rightNav, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(rightNav, LV_OPA_15, 0);
-    lv_obj_set_style_radius(rightNav, 2, 0);
-    lv_obj_set_style_border_width(rightNav, 0, 0);
+    // REMOVED: Nav indicators and category labels - clean UI
     
     if (strlen(title) > 0) {
         lv_obj_t *label = lv_label_create(card);
@@ -2187,33 +2200,7 @@ lv_obj_t* createCard(const char* title, bool fullBg = false) {
         lv_obj_align(label, LV_ALIGN_TOP_LEFT, 4, 10);
     }
     
-    // IMPROVED: Add category indicator and sub-card dots at bottom
-    // Category name at bottom
-    const char* catNames[] = {"CLOCK", "COMPASS", "ACTIVITY", "GAMES", "WEATHER", 
-                              "STOCKS", "MEDIA", "TIMER", "STREAK", "CALENDAR",
-                              "TORCH", "TOOLS", "SETTINGS", "SYSTEM", "IDENTITY"};
-    lv_obj_t *catLabel = lv_label_create(card);
-    lv_label_set_text(catLabel, catNames[currentCategory]);
-    lv_obj_set_style_text_color(catLabel, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(catLabel, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_letter_space(catLabel, 2, 0);
-    lv_obj_align(catLabel, LV_ALIGN_BOTTOM_MID, 0, 85);  // Positioned in bottom nav zone
-    
-    // Sub-card position dots
-    int numSubCards = maxSubCards[currentCategory];
-    if (numSubCards > 1) {
-        int dotSpacing = 10;
-        int totalWidth = (numSubCards - 1) * dotSpacing;
-        for (int i = 0; i < numSubCards; i++) {
-            lv_obj_t *dot = lv_obj_create(card);
-            lv_obj_set_size(dot, 5, 5);
-            int xPos = -totalWidth/2 + i * dotSpacing;
-            lv_obj_align(dot, LV_ALIGN_BOTTOM_MID, xPos, 68);
-            lv_obj_set_style_bg_color(dot, (i == currentSubCard) ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x4A4A4A), 0);
-            lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-            lv_obj_set_style_border_width(dot, 0, 0);
-        }
-    }
+    // REMOVED: Sub-card dots - clean UI
     
     return card;
 }
@@ -2445,7 +2432,7 @@ void createClockCard() {
         displayWallpaperImage(bgCard, userData.wallpaperIndex);
     }
     
-    // Main card container - IMPROVED: Safe area with padding for nav zones
+    // Main card container - CLEAN UI
     lv_obj_t *card = lv_obj_create(bgCard);
     lv_obj_set_size(card, LCD_WIDTH, LCD_HEIGHT);
     lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
@@ -2454,26 +2441,9 @@ void createClockCard() {
     lv_obj_set_style_pad_all(card, 0, 0);
     disableAllScrolling(card);
     
-    // IMPROVED: Navigation hint indicators (subtle edge markers)
-    // Left nav indicator
-    lv_obj_t *leftNav = lv_obj_create(card);
-    lv_obj_set_size(leftNav, 4, 60);
-    lv_obj_align(leftNav, LV_ALIGN_LEFT_MID, 8, 0);
-    lv_obj_set_style_bg_color(leftNav, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(leftNav, LV_OPA_20, 0);
-    lv_obj_set_style_radius(leftNav, 2, 0);
-    lv_obj_set_style_border_width(leftNav, 0, 0);
+    // REMOVED: Nav indicators for clean UI
     
-    // Right nav indicator
-    lv_obj_t *rightNav = lv_obj_create(card);
-    lv_obj_set_size(rightNav, 4, 60);
-    lv_obj_align(rightNav, LV_ALIGN_RIGHT_MID, -8, 0);
-    lv_obj_set_style_bg_color(rightNav, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(rightNav, LV_OPA_20, 0);
-    lv_obj_set_style_radius(rightNav, 2, 0);
-    lv_obj_set_style_border_width(rightNav, 0, 0);
-    
-    // Time display - IMPROVED: Centered properly with better vertical positioning
+    // Time display - NO SECONDS to avoid constant refresh
     RTC_DateTime dt = rtc.getDateTime();
     char timeBuf[10];
     snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", dt.getHour(), dt.getMinute());
@@ -2482,27 +2452,19 @@ void createClockCard() {
     lv_label_set_text(clockLabel, timeBuf);
     lv_obj_set_style_text_color(clockLabel, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(clockLabel, &lv_font_montserrat_48, 0);
-    // IMPROVED: True center positioning, moved up slightly for balance
-    lv_obj_align(clockLabel, LV_ALIGN_CENTER, 0, -80);
+    lv_obj_align(clockLabel, LV_ALIGN_CENTER, 0, -60);
     
-    // Seconds - IMPROVED: Positioned below time for cleaner look
-    char secBuf[8];
-    snprintf(secBuf, sizeof(secBuf), ":%02d", dt.getSecond());
-    lv_obj_t *secLabel = lv_label_create(card);
-    lv_label_set_text(secLabel, secBuf);
-    lv_obj_set_style_text_color(secLabel, theme.accent, 0);
-    lv_obj_set_style_text_font(secLabel, &lv_font_montserrat_24, 0);
-    lv_obj_align_to(secLabel, clockLabel, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -8);
+    // REMOVED: Seconds display - causes constant refresh issues
     
-    // Day name - IMPROVED: Better spacing below time
+    // Day name
     const char* dayNames[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
     lv_obj_t *dayLabel = lv_label_create(card);
     lv_label_set_text(dayLabel, dayNames[dt.getWeek()]);
     lv_obj_set_style_text_color(dayLabel, lv_color_hex(0x8E8E93), 0);
     lv_obj_set_style_text_font(dayLabel, &lv_font_montserrat_18, 0);
-    lv_obj_align(dayLabel, LV_ALIGN_CENTER, 0, -10);
+    lv_obj_align(dayLabel, LV_ALIGN_CENTER, 0, 0);
     
-    // Full date - IMPROVED: Clear separation from day name
+    // Full date
     char dateBuf[32];
     const char* monthNames[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     snprintf(dateBuf, sizeof(dateBuf), "%s %d, %d", monthNames[dt.getMonth()-1], dt.getDay(), dt.getYear());
@@ -2510,13 +2472,12 @@ void createClockCard() {
     lv_label_set_text(dateLabel, dateBuf);
     lv_obj_set_style_text_color(dateLabel, theme.accent, 0);
     lv_obj_set_style_text_font(dateLabel, &lv_font_montserrat_16, 0);
-    lv_obj_align(dateLabel, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_align(dateLabel, LV_ALIGN_CENTER, 0, 30);
     
-    // IMPROVED: Status bar - moved higher to avoid bottom nav zone overlap
+    // Status bar at bottom
     lv_obj_t *statusBar = lv_obj_create(card);
     lv_obj_set_size(statusBar, LCD_WIDTH - 60, 50);
-    // FIXED: Position above the bottom nav zone (80px reserved)
-    lv_obj_align(statusBar, LV_ALIGN_BOTTOM_MID, 0, -90);
+    lv_obj_align(statusBar, LV_ALIGN_BOTTOM_MID, 0, -30);
     lv_obj_set_style_bg_color(statusBar, lv_color_hex(0x1C1C1E), 0);
     lv_obj_set_style_bg_opa(statusBar, LV_OPA_70, 0);
     lv_obj_set_style_radius(statusBar, 25, 0);
@@ -2525,7 +2486,6 @@ void createClockCard() {
     lv_obj_set_style_pad_right(statusBar, 12, 0);
     disableAllScrolling(statusBar);
     
-    // IMPROVED: Status items with better spacing (3 items for cleaner look)
     // WiFi indicator
     lv_obj_t *wifiIcon = lv_label_create(statusBar);
     lv_label_set_text(wifiIcon, LV_SYMBOL_WIFI);
@@ -2761,7 +2721,7 @@ void createAnalogClockCard() {
     lv_obj_set_size(leftNav, 4, 50);
     lv_obj_align(leftNav, LV_ALIGN_LEFT_MID, 8, 0);
     lv_obj_set_style_bg_color(leftNav, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(leftNav, LV_OPA_15, 0);
+    lv_obj_set_style_bg_opa(leftNav, LV_OPA_10, 0);
     lv_obj_set_style_radius(leftNav, 2, 0);
     lv_obj_set_style_border_width(leftNav, 0, 0);
     
@@ -2769,7 +2729,7 @@ void createAnalogClockCard() {
     lv_obj_set_size(rightNav, 4, 50);
     lv_obj_align(rightNav, LV_ALIGN_RIGHT_MID, -8, 0);
     lv_obj_set_style_bg_color(rightNav, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(rightNav, LV_OPA_15, 0);
+    lv_obj_set_style_bg_opa(rightNav, LV_OPA_10, 0);
     lv_obj_set_style_radius(rightNav, 2, 0);
     lv_obj_set_style_border_width(rightNav, 0, 0);
     
@@ -5107,6 +5067,13 @@ void createCalendarCard() {
 // 
 void themeChangeCb(lv_event_t *e);
 void brightnessChangeCb(lv_event_t *e);
+void shutdownBtnCb(lv_event_t *e);
+
+// Shutdown button callback - triggers device shutdown from settings
+void shutdownBtnCb(lv_event_t *e) {
+    USBSerial.println("[SETTINGS] Power Off tapped - shutting down");
+    shutdownDevice();
+}
 
 void createSettingsCard() {
     GradientTheme &theme = gradientThemes[userData.themeIndex];
@@ -5206,6 +5173,37 @@ void createSettingsCard() {
     lv_obj_set_style_text_color(tapHint, lv_color_hex(0x636366), 0);
     lv_obj_set_style_text_font(tapHint, &lv_font_montserrat_10, 0);
     lv_obj_align(tapHint, LV_ALIGN_TOP_RIGHT, -15, 12);
+    
+    // POWER OFF button - Red styled row - HIGHLY VISIBLE
+    lv_obj_t *powerOffRow = lv_obj_create(card);
+    lv_obj_set_size(powerOffRow, LCD_WIDTH - 70, 65);
+    lv_obj_align(powerOffRow, LV_ALIGN_TOP_MID, 0, 330);
+    lv_obj_set_style_bg_color(powerOffRow, lv_color_hex(0xFF3B30), 0);  // RED background for visibility
+    lv_obj_set_style_radius(powerOffRow, 14, 0);
+    lv_obj_set_style_border_width(powerOffRow, 2, 0);
+    lv_obj_set_style_border_color(powerOffRow, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_add_flag(powerOffRow, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(powerOffRow, shutdownBtnCb, LV_EVENT_CLICKED, NULL);
+    lv_obj_clear_flag(powerOffRow, LV_OBJ_FLAG_SCROLLABLE);
+    
+    // Power icon
+    lv_obj_t *powerIcon = lv_label_create(powerOffRow);
+    lv_label_set_text(powerIcon, LV_SYMBOL_POWER);
+    lv_obj_set_style_text_color(powerIcon, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(powerIcon, &lv_font_montserrat_24, 0);
+    lv_obj_align(powerIcon, LV_ALIGN_LEFT_MID, 15, 0);
+    
+    lv_obj_t *powerOffLbl = lv_label_create(powerOffRow);
+    lv_label_set_text(powerOffLbl, "SHUT DOWN");
+    lv_obj_set_style_text_color(powerOffLbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(powerOffLbl, &lv_font_montserrat_18, 0);
+    lv_obj_align(powerOffLbl, LV_ALIGN_LEFT_MID, 50, 0);
+    
+    // Arrow indicator
+    lv_obj_t *powerArrow = lv_label_create(powerOffRow);
+    lv_label_set_text(powerArrow, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_color(powerArrow, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(powerArrow, LV_ALIGN_RIGHT_MID, -10, 0);
 }
 
 // Theme change callback - cycles through themes
@@ -6683,12 +6681,7 @@ void handlePowerButton() {
             powerButtonPressed = true;
             powerButtonPressStartMs = now;
         }
-        
-        // Hold for 3 seconds = shutdown
-        if (powerButtonPressed && (now - powerButtonPressStartMs >= 3000)) {
-            USBSerial.println("[PWR] Hold 3s - SHUTDOWN");
-            shutdownDevice();
-        }
+        // Shutdown removed from physical button - use Settings card instead
     }
     // Button released
     else {
@@ -6743,11 +6736,17 @@ void handleBootButton() {
             bootButtonPressed = true;
             bootButtonPressStartMs = now;
         }
+        
+        // CHANGED: Long press (3s) = SHUTDOWN instead of 10s power button
+        if (bootButtonPressed && (now - bootButtonPressStartMs) >= 3000) {
+            USBSerial.println("[BOOT] Long press detected - SHUTTING DOWN");
+            shutdownDevice();
+        }
     }
     else if (buttonState == HIGH && bootButtonPressed) {
         unsigned long pressDuration = now - bootButtonPressStartMs;
         
-        // Short press - navigate categories
+        // Short press - navigate categories (only if < 3s, otherwise it was shutdown)
         if (pressDuration < 1000) {
             if (!screenOn) {
                 screenOnFunc();
@@ -7945,26 +7944,30 @@ void loop() {
         }
     }
     
-    // Clock refresh - every 5 seconds
-    if (screenOn && currentCategory == CAT_CLOCK && !isTransitioning) {
+    // REMOVED: Clock refresh - no seconds display, refresh only every minute
+    if (screenOn && currentCategory == CAT_CLOCK && currentSubCard == 0 && !isTransitioning) {
         static unsigned long lastClockRefresh = 0;
-        if (millis() - lastClockRefresh >= 5000) {
-            lastClockRefresh = millis();
-            navigateTo(CAT_CLOCK, currentSubCard);
+        static uint8_t lastMinute = 255;
+        if (clockMinute != lastMinute) {
+            lastMinute = clockMinute;
+            if (millis() - lastClockRefresh >= 60000) {  // Max once per minute
+                lastClockRefresh = millis();
+                navigateTo(CAT_CLOCK, currentSubCard);
+            }
         }
     }
     
-    // Compass refresh - 2Hz
-    if (screenOn && currentCategory == CAT_COMPASS && !isTransitioning) {
+    // Compass refresh - reduced to 1Hz to prevent nav issues
+    if (screenOn && currentCategory == CAT_COMPASS && !isTransitioning && canNavigate()) {
         static unsigned long lastCompassRefresh = 0;
-        if (millis() - lastCompassRefresh >= 500) {
+        if (millis() - lastCompassRefresh >= 1000) {
             lastCompassRefresh = millis();
             navigateTo(CAT_COMPASS, currentSubCard);
         }
     }
     
     // Dino game visual refresh
-    if (screenOn && currentCategory == CAT_GAMES && currentSubCard == 1 && !isTransitioning) {
+    if (screenOn && currentCategory == CAT_GAMES && currentSubCard == 1 && !isTransitioning && canNavigate()) {
         static unsigned long lastDinoRefresh = 0;
         if (millis() - lastDinoRefresh >= 50) {
             lastDinoRefresh = millis();
@@ -7987,7 +7990,13 @@ void loop() {
         lastNTPSync = millis();
     }
     
-    delay(20);  // Increased delay for better stability and reduced freezing
+    delay(5);  // Faster loop for better responsiveness
+    
+    // CRITICAL: Force reset stuck states EVERY loop
+    if (isTransitioning && (millis() - transitionStartMs > 300)) {
+        isTransitioning = false;
+        navigationLocked = false;
+    }
 }
 
 // 
