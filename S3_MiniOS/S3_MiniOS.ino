@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- *  Widget OS v1.0.0 (A180)
+ *  Widget OS v1.0.0 (A180) - FUSION LABS WEB EDITION
  *  ESP32-S3-Touch-AMOLED-1.8" Smartwatch Firmware
  * ═══════════════════════════════════════════════════════════════════════════════
  * 
@@ -20,7 +20,7 @@
  *  │   └── power.json       (Power management)
  *  ├── FACES/
  *  │   ├── custom/          (User-added faces)
- *  │   └── imported/        (Imported faces)
+ *  │   └── imported/        (Imported faces from web)
  *  ├── IMAGES/              (User images - auto-created)
  *  ├── MUSIC/               (User music - auto-created)
  *  ├── CACHE/
@@ -36,6 +36,11 @@
  *  ✅ SD may override or add, never required to boot
  *  ✅ OS boots even if SD is missing (uses defaults)
  *  ✅ Same SD layout works across board sizes (1.8" & 2.06")
+ *
+ *  WEB FEATURES (Fusion Labs Integration):
+ *  ✅ USB Serial WiFi Configuration
+ *  ✅ USB Serial Watch Face Installation
+ *  ✅ Device Status Query via Serial
  *
  *  BOARD: A180 (1.8" AMOLED)
  *  Target: Productivity / utility / clarity focused smartwatch OS
@@ -174,7 +179,7 @@ unsigned long backupCompleteShownMs = 0;
 #define LCD_HEIGHT      448
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  WIFI CONFIGURATION (Widget OS compatible)
+//  WIDGET OS - WIFI CONFIGURATION (Widget OS compatible)
 // ═══════════════════════════════════════════════════════════════════════════════
 #define MAX_WIFI_NETWORKS 5
 #define MAX_OPEN_NETWORKS 10
@@ -284,7 +289,7 @@ enum Category {
 
 int currentCategory = CAT_CLOCK;
 int currentSubCard = 0;
-const int maxSubCards[] = {5, 3, 4, 3, 2, 2, 2, 4, 3, 1, 2, 4, 2, 3, 2};  // Settings now has 2 cards (General + SD Health)
+const int maxSubCards[] = {5, 3, 4, 3, 2, 2, 2, 4, 3, 1, 2, 4, 2, 3, 2};
 
 bool isTransitioning = false;
 int transitionDir = 0;
@@ -390,6 +395,20 @@ struct SDFace {
 SDFace sdFaces[MAX_SD_FACES];
 int numSDFaces = 0;
 
+// Active watch face (for web face loading)
+char activeWatchFaceId[32] = "default";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FUSION LABS WEB SERIAL HANDLER - GLOBAL VARIABLES
+// ═══════════════════════════════════════════════════════════════════════════════
+String serialBuffer = "";
+bool receivingWifiConfig = false;
+String wifiConfigBuffer = "";
+bool receivingFaceData = false;
+String faceIdBuffer = "";
+String faceDataBuffer = "";
+bool waitingForFaceId = false;
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  TOUCH INTERRUPT
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -412,12 +431,9 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  WIDGET OS - SD CARD INITIALIZATION (CRITICAL)
+//  SD CARD HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Get human-readable SD card status string
- */
 const char* getSDCardStatusString() {
     switch (sdCardStatus) {
         case SD_STATUS_NOT_PRESENT: return "Not Present";
@@ -430,9 +446,6 @@ const char* getSDCardStatusString() {
     }
 }
 
-/**
- * Create a directory if it doesn't exist
- */
 bool createDirIfNotExists(const char* path) {
     if (SD_MMC.exists(path)) {
         return true;
@@ -447,16 +460,424 @@ bool createDirIfNotExists(const char* path) {
     }
 }
 
-/**
- * Create the Widget OS SD card folder structure
- * This is called on first boot or if structure is missing
- */
+void logToBootLog(const char* message) {
+    if (!sdCardInitialized) return;
+    
+    File logFile = SD_MMC.open(SD_BOOT_LOG, FILE_APPEND);
+    if (logFile) {
+        char timestamp[32];
+        if (hasRTC) {
+            RTC_DateTime dt = rtc.getDateTime();
+            snprintf(timestamp, sizeof(timestamp), "[%04d-%02d-%02d %02d:%02d:%02d] ",
+                     dt.getYear(), dt.getMonth(), dt.getDay(),
+                     dt.getHour(), dt.getMinute(), dt.getSecond());
+        } else {
+            snprintf(timestamp, sizeof(timestamp), "[%lu] ", millis());
+        }
+        logFile.print(timestamp);
+        logFile.println(message);
+        logFile.close();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  WIFI CONFIG - LOAD FROM SD
+// ═══════════════════════════════════════════════════════════════════════════════
+void loadWiFiConfigFromSD() {
+    if (!hasSD || !sdCardInitialized) {
+        USBSerial.println("[WIFI] No SD card available, using defaults");
+        return;
+    }
+    
+    if (!SD_MMC.exists(SD_WIFI_CONFIG)) {
+        USBSerial.println("[WIFI] No WiFi config file found on SD");
+        return;
+    }
+    
+    File configFile = SD_MMC.open(SD_WIFI_CONFIG, FILE_READ);
+    if (!configFile) {
+        USBSerial.println("[WIFI] Failed to open WiFi config file");
+        return;
+    }
+    
+    USBSerial.println("[WIFI] Loading WiFi config from SD card...");
+    numWifiNetworks = 0;
+    
+    while (configFile.available() && numWifiNetworks < MAX_WIFI_NETWORKS) {
+        String line = configFile.readStringUntil('\n');
+        line.trim();
+        
+        // Skip comments and empty lines
+        if (line.length() == 0 || line.startsWith("#")) {
+            continue;
+        }
+        
+        int eqPos = line.indexOf('=');
+        if (eqPos > 0) {
+            String key = line.substring(0, eqPos);
+            String value = line.substring(eqPos + 1);
+            key.trim();
+            value.trim();
+            
+            if (key == "SSID" || key.startsWith("WIFI") && key.endsWith("_SSID")) {
+                strncpy(wifiNetworks[numWifiNetworks].ssid, value.c_str(), 63);
+                wifiNetworks[numWifiNetworks].ssid[63] = '\0';
+            } else if (key == "PASSWORD" || key.startsWith("WIFI") && key.endsWith("_PASS")) {
+                strncpy(wifiNetworks[numWifiNetworks].password, value.c_str(), 63);
+                wifiNetworks[numWifiNetworks].password[63] = '\0';
+                wifiNetworks[numWifiNetworks].valid = true;
+                numWifiNetworks++;
+            } else if (key == "CITY") {
+                strncpy(weatherCity, value.c_str(), 63);
+                weatherCity[63] = '\0';
+            } else if (key == "COUNTRY") {
+                strncpy(weatherCountry, value.c_str(), 7);
+                weatherCountry[7] = '\0';
+            } else if (key == "GMT_OFFSET") {
+                gmtOffsetSec = value.toInt() * 3600;
+            }
+        }
+    }
+    
+    configFile.close();
+    wifiConfigFromSD = (numWifiNetworks > 0);
+    USBSerial.printf("[WIFI] Loaded %d WiFi networks from SD card\n", numWifiNetworks);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FUSION LABS WEB SERIAL HANDLER - WIFI CONFIG
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void sendDeviceStatus() {
+    USBSerial.println("WIDGET_STATUS_START");
+    USBSerial.println("DEVICE:Widget OS Watch");
+    USBSerial.println("VERSION:" WIDGET_OS_VERSION);
+    USBSerial.printf("BOARD:%dx%d\n", LCD_WIDTH, LCD_HEIGHT);
+    USBSerial.printf("DEVICE_ID:%s\n", DEVICE_ID);
+    USBSerial.printf("SD_CARD:%s\n", (hasSD && sdCardInitialized) ? "YES" : "NO");
+    USBSerial.printf("WIFI:%s\n", (WiFi.status() == WL_CONNECTED) ? WiFi.SSID().c_str() : "Not Connected");
+    USBSerial.printf("BATTERY:%d%%\n", batteryPercent);
+    USBSerial.printf("FACES:%d\n", numSDFaces);
+    USBSerial.println("WIDGET_STATUS_END");
+}
+
+void sendWifiConfig() {
+    if (!hasSD || !sdCardInitialized) {
+        USBSerial.println("ERROR:SD_CARD_NOT_AVAILABLE");
+        return;
+    }
+    
+    if (!SD_MMC.exists(SD_WIFI_CONFIG)) {
+        USBSerial.println("ERROR:CONFIG_FILE_NOT_FOUND");
+        return;
+    }
+    
+    File configFile = SD_MMC.open(SD_WIFI_CONFIG, FILE_READ);
+    if (!configFile) {
+        USBSerial.println("ERROR:CANNOT_OPEN_FILE");
+        return;
+    }
+    
+    USBSerial.println("WIFI_CONFIG_START");
+    while (configFile.available()) {
+        String line = configFile.readStringUntil('\n');
+        line.trim();
+        if (line.length() > 0 && !line.startsWith("#")) {
+            USBSerial.println(line);
+        }
+    }
+    configFile.close();
+    USBSerial.println("WIFI_CONFIG_END");
+}
+
+void saveWifiConfig(String config) {
+    if (!hasSD || !sdCardInitialized) {
+        USBSerial.println("ERROR:SD_CARD_NOT_AVAILABLE");
+        return;
+    }
+    
+    // Ensure directory exists
+    if (!SD_MMC.exists(SD_WIFI_PATH)) {
+        SD_MMC.mkdir(SD_WIFI_PATH);
+    }
+    
+    File configFile = SD_MMC.open(SD_WIFI_CONFIG, FILE_WRITE);
+    if (!configFile) {
+        USBSerial.println("ERROR:CANNOT_CREATE_FILE");
+        return;
+    }
+    
+    configFile.println("# ═══════════════════════════════════════════════════════════════════");
+    configFile.println("#  Widget OS - WiFi Configuration");
+    configFile.println("#  Updated via Fusion Labs Web Serial Tool");
+    configFile.println("# ═══════════════════════════════════════════════════════════════════");
+    configFile.println();
+    configFile.print(config);
+    configFile.close();
+    
+    USBSerial.println("CONFIG_WRITTEN");
+    
+    // Reload WiFi config
+    loadWiFiConfigFromSD();
+    USBSerial.println("CONFIG_RELOADED");
+    logToBootLog("WiFi config updated via web serial");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FUSION LABS WEB SERIAL HANDLER - WATCH FACES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void listInstalledFaces() {
+    USBSerial.println("FACE_LIST_START");
+    
+    // List default/built-in faces
+    USBSerial.println("FACE:default,Default,Built-in,1.0.0");
+    USBSerial.println("FACE:minimal,Minimal Dark,Built-in,1.0.0");
+    USBSerial.println("FACE:digital,Digital,Built-in,1.0.0");
+    
+    // List SD card faces
+    for (int i = 0; i < numSDFaces; i++) {
+        if (sdFaces[i].valid) {
+            char faceLine[128];
+            snprintf(faceLine, sizeof(faceLine), "FACE:%s,%s,%s,%s",
+                     sdFaces[i].path, sdFaces[i].name, sdFaces[i].author, sdFaces[i].version);
+            USBSerial.println(faceLine);
+        }
+    }
+    
+    USBSerial.printf("ACTIVE_FACE:%s\n", activeWatchFaceId);
+    USBSerial.println("FACE_LIST_END");
+}
+
+void handleFaceSerialData(String line) {
+    if (waitingForFaceId) {
+        faceIdBuffer = line;
+        waitingForFaceId = false;
+        faceDataBuffer = "";
+        USBSerial.println("READY_FOR_FACE_DATA");
+        return;
+    }
+    
+    if (line == "END_FACE_DATA") {
+        receivingFaceData = false;
+        saveFaceToSD(faceIdBuffer, faceDataBuffer);
+        faceIdBuffer = "";
+        faceDataBuffer = "";
+        return;
+    }
+    
+    faceDataBuffer += line + "\n";
+}
+
+void saveFaceToSD(String faceId, String faceData) {
+    if (!hasSD || !sdCardInitialized) {
+        USBSerial.println("ERROR:SD_CARD_NOT_AVAILABLE");
+        return;
+    }
+    
+    // Ensure faces directories exist
+    if (!SD_MMC.exists(SD_FACES_IMPORTED_PATH)) {
+        SD_MMC.mkdir(SD_FACES_PATH);
+        SD_MMC.mkdir(SD_FACES_IMPORTED_PATH);
+    }
+    
+    // Create face file path
+    String facePath = String(SD_FACES_IMPORTED_PATH) + "/" + faceId + ".json";
+    
+    File faceFile = SD_MMC.open(facePath.c_str(), FILE_WRITE);
+    if (!faceFile) {
+        USBSerial.println("ERROR:CANNOT_CREATE_FACE_FILE");
+        return;
+    }
+    
+    faceFile.print(faceData);
+    faceFile.close();
+    
+    USBSerial.println("FACE_SAVED:" + faceId);
+    
+    // Reload faces from SD
+    scanSDFaces();
+    
+    logToBootLog(("Watch face installed: " + faceId).c_str());
+}
+
+void setActiveFace(String command) {
+    // Extract face ID from command like "WIDGET_SET_FACE:faceid"
+    int colonPos = command.indexOf(':');
+    if (colonPos > 0) {
+        String faceId = command.substring(colonPos + 1);
+        faceId.trim();
+        strncpy(activeWatchFaceId, faceId.c_str(), 31);
+        activeWatchFaceId[31] = '\0';
+        USBSerial.println("FACE_SET:" + faceId);
+        logToBootLog(("Active face changed to: " + faceId).c_str());
+    } else {
+        USBSerial.println("ERROR:INVALID_FACE_COMMAND");
+    }
+}
+
+void deleteFace(String command) {
+    // Extract face ID from command like "WIDGET_DELETE_FACE:faceid"
+    int colonPos = command.indexOf(':');
+    if (colonPos > 0) {
+        String faceId = command.substring(colonPos + 1);
+        faceId.trim();
+        
+        String facePath = String(SD_FACES_IMPORTED_PATH) + "/" + faceId + ".json";
+        
+        if (SD_MMC.exists(facePath.c_str())) {
+            SD_MMC.remove(facePath.c_str());
+            USBSerial.println("FACE_DELETED:" + faceId);
+            scanSDFaces();
+            logToBootLog(("Watch face deleted: " + faceId).c_str());
+        } else {
+            USBSerial.println("ERROR:FACE_NOT_FOUND");
+        }
+    } else {
+        USBSerial.println("ERROR:INVALID_DELETE_COMMAND");
+    }
+}
+
+void scanSDFaces() {
+    numSDFaces = 0;
+    
+    if (!hasSD || !sdCardInitialized) return;
+    
+    // Scan imported faces
+    File dir = SD_MMC.open(SD_FACES_IMPORTED_PATH);
+    if (dir && dir.isDirectory()) {
+        File entry = dir.openNextFile();
+        while (entry && numSDFaces < MAX_SD_FACES) {
+            String filename = entry.name();
+            if (filename.endsWith(".json")) {
+                // Parse face JSON
+                StaticJsonDocument<512> doc;
+                DeserializationError error = deserializeJson(doc, entry);
+                
+                if (!error) {
+                    strncpy(sdFaces[numSDFaces].name, doc["name"] | "Unknown", 31);
+                    strncpy(sdFaces[numSDFaces].author, doc["author"] | "Unknown", 31);
+                    strncpy(sdFaces[numSDFaces].version, doc["version"] | "1.0.0", 15);
+                    strncpy(sdFaces[numSDFaces].path, filename.c_str(), 63);
+                    sdFaces[numSDFaces].valid = true;
+                    numSDFaces++;
+                }
+            }
+            entry.close();
+            entry = dir.openNextFile();
+        }
+        dir.close();
+    }
+    
+    USBSerial.printf("[FACES] Found %d custom faces on SD card\n", numSDFaces);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FUSION LABS WEB SERIAL HANDLER - MAIN PROCESSOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void processSerialCommand(String command) {
+    command.trim();
+    
+    // Ping/Pong for connection test
+    if (command == "WIDGET_PING") {
+        USBSerial.println("WIDGET_PONG");
+        return;
+    }
+    
+    // Device status
+    if (command == "WIDGET_STATUS") {
+        sendDeviceStatus();
+        return;
+    }
+    
+    // WiFi config commands
+    if (command == "WIDGET_READ_WIFI") {
+        sendWifiConfig();
+        return;
+    }
+    
+    if (command == "WIDGET_WRITE_WIFI") {
+        receivingWifiConfig = true;
+        wifiConfigBuffer = "";
+        USBSerial.println("READY_FOR_CONFIG");
+        return;
+    }
+    
+    // Handle WiFi config data
+    if (receivingWifiConfig) {
+        if (command == "END_WIFI_CONFIG") {
+            receivingWifiConfig = false;
+            saveWifiConfig(wifiConfigBuffer);
+        } else {
+            wifiConfigBuffer += command + "\n";
+        }
+        return;
+    }
+    
+    // Watch face commands
+    if (command == "WIDGET_LIST_FACES") {
+        listInstalledFaces();
+        return;
+    }
+    
+    if (command == "WIDGET_WRITE_FACE") {
+        receivingFaceData = true;
+        waitingForFaceId = true;
+        USBSerial.println("SEND_FACE_ID");
+        return;
+    }
+    
+    if (command.startsWith("WIDGET_SET_FACE:")) {
+        setActiveFace(command);
+        return;
+    }
+    
+    if (command.startsWith("WIDGET_DELETE_FACE:")) {
+        deleteFace(command);
+        return;
+    }
+    
+    // Handle face data
+    if (receivingFaceData) {
+        handleFaceSerialData(command);
+        return;
+    }
+    
+    // Unknown command
+    if (command.length() > 0) {
+        USBSerial.println("UNKNOWN_COMMAND:" + command);
+    }
+}
+
+void handleSerialConfig() {
+    while (USBSerial.available()) {
+        char c = USBSerial.read();
+        
+        if (c == '\n') {
+            processSerialCommand(serialBuffer);
+            serialBuffer = "";
+        } else if (c != '\r') {
+            serialBuffer += c;
+            
+            // Prevent buffer overflow
+            if (serialBuffer.length() > 4096) {
+                serialBuffer = "";
+                USBSerial.println("ERROR:BUFFER_OVERFLOW");
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SD CARD INITIALIZATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
 bool createWidgetOSSDStructure() {
     USBSerial.println("[SD] Creating Widget OS folder structure...");
     
     bool success = true;
     
-    // Create main directories
     success &= createDirIfNotExists(SD_ROOT_PATH);
     success &= createDirIfNotExists(SD_SYSTEM_PATH);
     success &= createDirIfNotExists(SD_SYSTEM_LOGS_PATH);
@@ -474,23 +895,13 @@ bool createWidgetOSSDStructure() {
     if (success) {
         USBSerial.println("[SD] Folder structure created successfully");
         sdStructureCreated = true;
-    } else {
-        USBSerial.println("[SD] ERROR: Failed to create some directories");
     }
     
     return success;
 }
 
-/**
- * Create device.json with hardware info
- */
 void createDeviceJson() {
-    if (SD_MMC.exists(SD_DEVICE_JSON)) {
-        USBSerial.println("[SD] device.json already exists");
-        return;
-    }
-    
-    USBSerial.println("[SD] Creating device.json...");
+    if (SD_MMC.exists(SD_DEVICE_JSON)) return;
     
     File file = SD_MMC.open(SD_DEVICE_JSON, FILE_WRITE);
     if (file) {
@@ -499,564 +910,96 @@ void createDeviceJson() {
         doc["screen"] = DEVICE_SCREEN;
         doc["storage"] = "sd";
         doc["hw_rev"] = DEVICE_HW_REV;
-        
         serializeJsonPretty(doc, file);
         file.close();
-        USBSerial.println("[SD] device.json created");
-    } else {
-        USBSerial.println("[SD] ERROR: Failed to create device.json");
     }
 }
 
-/**
- * Create os.json with version info
- */
 void createOSJson() {
-    // Always update os.json to reflect current firmware version
-    USBSerial.println("[SD] Creating/updating os.json...");
-    
     File file = SD_MMC.open(SD_OS_JSON, FILE_WRITE);
     if (file) {
         StaticJsonDocument<256> doc;
         doc["name"] = WIDGET_OS_NAME;
         doc["version"] = WIDGET_OS_VERSION;
         doc["build"] = WIDGET_OS_BUILD;
-        
         serializeJsonPretty(doc, file);
         file.close();
-        USBSerial.println("[SD] os.json created");
-    } else {
-        USBSerial.println("[SD] ERROR: Failed to create os.json");
     }
 }
 
-/**
- * Create build.txt with human-readable build info
- */
-void createBuildTxt() {
-    // Always update build.txt
-    USBSerial.println("[SD] Creating/updating build.txt...");
-    
-    File file = SD_MMC.open(SD_BUILD_TXT, FILE_WRITE);
-    if (file) {
-        file.printf("%s %s\n", WIDGET_OS_NAME, WIDGET_OS_VERSION);
-        file.printf("Board: %s\n", DEVICE_ID);
-        file.printf("Display: %s\" AMOLED\n", DEVICE_SCREEN);
-        file.printf("Build: %s\n", WIDGET_OS_BUILD);
-        file.close();
-        USBSerial.println("[SD] build.txt created");
-    } else {
-        USBSerial.println("[SD] ERROR: Failed to create build.txt");
-    }
-}
-
-/**
- * Create default user.json config
- */
-void createDefaultUserJson() {
-    if (SD_MMC.exists(SD_USER_JSON)) {
-        USBSerial.println("[SD] user.json already exists - preserving user settings");
-        return;
-    }
-    
-    USBSerial.println("[SD] Creating default user.json...");
-    
-    File file = SD_MMC.open(SD_USER_JSON, FILE_WRITE);
-    if (file) {
-        StaticJsonDocument<256> doc;
-        doc["watch_face"] = "Minimal";
-        doc["brightness"] = 70;
-        doc["vibration"] = true;
-        
-        serializeJsonPretty(doc, file);
-        file.close();
-        USBSerial.println("[SD] user.json created");
-    } else {
-        USBSerial.println("[SD] ERROR: Failed to create user.json");
-    }
-}
-
-/**
- * Create default display.json config
- */
-void createDefaultDisplayJson() {
-    if (SD_MMC.exists(SD_DISPLAY_JSON)) {
-        return;
-    }
-    
-    USBSerial.println("[SD] Creating default display.json...");
-    
-    File file = SD_MMC.open(SD_DISPLAY_JSON, FILE_WRITE);
-    if (file) {
-        StaticJsonDocument<256> doc;
-        doc["always_on"] = false;
-        doc["timeout"] = 10;
-        
-        serializeJsonPretty(doc, file);
-        file.close();
-        USBSerial.println("[SD] display.json created");
-    } else {
-        USBSerial.println("[SD] ERROR: Failed to create display.json");
-    }
-}
-
-/**
- * Create default power.json config
- */
-void createDefaultPowerJson() {
-    if (SD_MMC.exists(SD_POWER_JSON)) {
-        return;
-    }
-    
-    USBSerial.println("[SD] Creating default power.json...");
-    
-    File file = SD_MMC.open(SD_POWER_JSON, FILE_WRITE);
-    if (file) {
-        StaticJsonDocument<256> doc;
-        doc["battery_saver_threshold"] = 20;
-        doc["auto_brightness"] = false;
-        
-        serializeJsonPretty(doc, file);
-        file.close();
-        USBSerial.println("[SD] power.json created");
-    } else {
-        USBSerial.println("[SD] ERROR: Failed to create power.json");
-    }
-}
-
-/**
- * Create UPDATE/README.txt
- */
-void createUpdateReadme() {
-    if (SD_MMC.exists(SD_UPDATE_README)) {
-        return;
-    }
-    
-    USBSerial.println("[SD] Creating UPDATE/README.txt...");
-    
-    File file = SD_MMC.open(SD_UPDATE_README, FILE_WRITE);
-    if (file) {
-        file.println("This folder is reserved for system updates.");
-        file.println("Do not place files here unless instructed.");
-        file.println("Firmware updates are handled via USB.");
-        file.close();
-        USBSerial.println("[SD] README.txt created");
-    } else {
-        USBSerial.println("[SD] ERROR: Failed to create README.txt");
-    }
-}
-
-/**
- * Create default WiFi config template
- */
-void createDefaultWiFiConfig() {
-    if (SD_MMC.exists(SD_WIFI_CONFIG)) {
-        USBSerial.println("[SD] WiFi config already exists - preserving");
-        return;
-    }
-    
-    USBSerial.println("[SD] Creating default WiFi config template...");
+void createWifiConfigTemplate() {
+    if (SD_MMC.exists(SD_WIFI_CONFIG)) return;
     
     File file = SD_MMC.open(SD_WIFI_CONFIG, FILE_WRITE);
     if (file) {
-        file.println("WIFI1_SSID=YourHomeNetwork");
-        file.println("WIFI1_PASS=YourHomePassword");
-        file.println("WIFI2_SSID=YourWorkNetwork");
-        file.println("WIFI2_PASS=YourWorkPassword");
-        file.println("#WIFI3_SSID=MyPhoneHotspot");
-        file.println("#WIFI3_PASS=HotspotPassword");
+        file.println("# ═══════════════════════════════════════════════════════════════════");
+        file.println("#  Widget OS - WiFi Configuration");
+        file.println("#  Board: " DEVICE_ID);
+        file.println("# ═══════════════════════════════════════════════════════════════════");
+        file.println("#");
+        file.println("#  Edit values below with your WiFi credentials.");
+        file.println("#  Use Fusion Labs web tool for easier configuration!");
+        file.println("#");
+        file.println("# ═══════════════════════════════════════════════════════════════════");
+        file.println();
+        file.println("SSID=YourWiFiNetworkName");
+        file.println("PASSWORD=YourWiFiPassword");
+        file.println();
+        file.println("# Optional additional networks");
+        file.println("WIFI1_SSID=HomeNetwork");
+        file.println("WIFI1_PASS=HomePassword");
+        file.println();
+        file.println("# Weather location");
         file.println("CITY=Perth");
         file.println("COUNTRY=AU");
         file.println("GMT_OFFSET=8");
         file.close();
-        USBSerial.println("[SD] WiFi config template created");
-    } else {
-        USBSerial.println("[SD] ERROR: Failed to create WiFi config");
     }
 }
 
-/**
- * Log message to boot.log on SD card
- */
-void logToBootLog(const char* message) {
-    if (!sdCardInitialized) return;
-    
-    File file = SD_MMC.open(SD_BOOT_LOG, FILE_APPEND);
-    if (file) {
-        // Get timestamp if RTC available
-        char timestamp[32];
-        if (hasRTC) {
-            snprintf(timestamp, sizeof(timestamp), "[%02d:%02d:%02d]", 
-                     clockHour, clockMinute, clockSecond);
-        } else {
-            snprintf(timestamp, sizeof(timestamp), "[%lu]", millis());
-        }
-        
-        file.printf("%s %s\n", timestamp, message);
-        file.close();
-    }
-}
-
-/**
- * Check if /WATCH folder exists and is valid
- * If corrupt, rename to /WATCH_BROKEN
- */
-bool validateSDStructure() {
-    if (!SD_MMC.exists(SD_ROOT_PATH)) {
-        USBSerial.println("[SD] /WATCH not found - will create");
-        return false;
-    }
-    
-    // Check if essential subdirectories exist
-    if (!SD_MMC.exists(SD_SYSTEM_PATH) || !SD_MMC.exists(SD_CONFIG_PATH)) {
-        USBSerial.println("[SD] WARNING: /WATCH structure appears corrupt");
-        
-        // Rename corrupt folder
-        if (SD_MMC.rename(SD_ROOT_PATH, "/WATCH_BROKEN")) {
-            USBSerial.println("[SD] Renamed corrupt folder to /WATCH_BROKEN");
-        }
-        
-        return false;
-    }
-    
-    USBSerial.println("[SD] /WATCH structure validated");
-    return true;
-}
-
-/**
- * Initialize Widget OS SD Card system
- * This is the main SD card initialization function
- */
-bool initWidgetOSSDCard() {
-    USBSerial.println("\n═══════════════════════════════════════════════════════════════════");
-    USBSerial.println("  WIDGET OS - SD Card Initialization");
-    USBSerial.println("═══════════════════════════════════════════════════════════════════");
-    
+void initSDCard() {
     sdCardStatus = SD_STATUS_INIT_IN_PROGRESS;
     
-    // Set SD_MMC pins for 1.8" board (1-bit mode)
-    // Using pins from pin_config.h: SDMMC_CLK=2, SDMMC_CMD=1, SDMMC_DATA=3
-    SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
-    
-    // Try to mount SD card in 1-bit mode
-    if (!SD_MMC.begin("/sdcard", true)) {  // true = 1-bit mode
-        USBSerial.println("[SD] ERROR: Card mount failed");
+    if (!SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_DEFAULT)) {
         sdCardStatus = SD_STATUS_MOUNT_FAILED;
-        sdErrorMessage = "Mount failed - check SD card";
-        hasSD = false;
-        return false;
+        USBSerial.println("[SD] Mount failed");
+        return;
     }
     
-    // Get card type
     uint8_t cardType = SD_MMC.cardType();
     if (cardType == CARD_NONE) {
-        USBSerial.println("[SD] ERROR: No SD card detected");
         sdCardStatus = SD_STATUS_NOT_PRESENT;
-        sdErrorMessage = "No SD card inserted";
-        hasSD = false;
-        return false;
+        USBSerial.println("[SD] No card present");
+        return;
     }
     
-    // Get card info
     switch (cardType) {
-        case CARD_MMC: sdCardType = "MMC"; break;
-        case CARD_SD: sdCardType = "SD"; break;
+        case CARD_MMC:  sdCardType = "MMC"; break;
+        case CARD_SD:   sdCardType = "SD"; break;
         case CARD_SDHC: sdCardType = "SDHC"; break;
-        default: sdCardType = "Unknown"; break;
+        default:        sdCardType = "Unknown"; break;
     }
     
     sdCardSizeMB = SD_MMC.cardSize() / (1024 * 1024);
     sdCardUsedMB = SD_MMC.usedBytes() / (1024 * 1024);
     
-    USBSerial.printf("[SD] Card Type: %s\n", sdCardType.c_str());
-    USBSerial.printf("[SD] Card Size: %llu MB\n", sdCardSizeMB);
-    USBSerial.printf("[SD] Total: %llu MB, Used: %llu MB\n", 
-                     SD_MMC.totalBytes() / (1024 * 1024),
-                     sdCardUsedMB);
+    hasSD = true;
+    sdCardInitialized = true;
+    sdCardStatus = SD_STATUS_MOUNTED_OK;
     
-    // Validate or create folder structure
-    if (!validateSDStructure()) {
-        if (!createWidgetOSSDStructure()) {
-            sdCardStatus = SD_STATUS_CORRUPT;
-            sdErrorMessage = "Failed to create folder structure";
-            hasSD = false;
-            return false;
-        }
-    }
+    USBSerial.printf("[SD] Card: %s, Size: %llu MB\n", sdCardType.c_str(), sdCardSizeMB);
     
-    // Create/update system files
+    // Create folder structure and system files
+    createWidgetOSSDStructure();
     createDeviceJson();
     createOSJson();
-    createBuildTxt();
+    createWifiConfigTemplate();
     
-    // Create default config files (preserves existing)
-    createDefaultUserJson();
-    createDefaultDisplayJson();
-    createDefaultPowerJson();
+    // Scan for custom faces
+    scanSDFaces();
     
-    // Create other required files
-    createUpdateReadme();
-    createDefaultWiFiConfig();
-    
-    // Clear boot log for this session
-    if (SD_MMC.exists(SD_BOOT_LOG)) {
-        SD_MMC.remove(SD_BOOT_LOG);
-    }
-    
-    sdCardStatus = SD_STATUS_MOUNTED_OK;
-    sdCardInitialized = true;
-    hasSD = true;
-    
-    // Log boot start
-    logToBootLog("═══════════════════════════════════════════════════════════════════");
-    char bootMsg[64];
-    snprintf(bootMsg, sizeof(bootMsg), "%s %s - Boot started", WIDGET_OS_NAME, WIDGET_OS_VERSION);
-    logToBootLog(bootMsg);
-    snprintf(bootMsg, sizeof(bootMsg), "Device: %s (%s\" AMOLED)", DEVICE_ID, DEVICE_SCREEN);
-    logToBootLog(bootMsg);
-    
-    USBSerial.println("[SD] Widget OS SD card initialized successfully!");
-    USBSerial.println("═══════════════════════════════════════════════════════════════════\n");
-    
-    return true;
-}
-
-/**
- * Load user config from SD card
- */
-void loadUserConfigFromSD() {
-    if (!sdCardInitialized) return;
-    
-    File file = SD_MMC.open(SD_USER_JSON, FILE_READ);
-    if (file) {
-        StaticJsonDocument<512> doc;
-        DeserializationError error = deserializeJson(doc, file);
-        file.close();
-        
-        if (!error) {
-            if (doc.containsKey("brightness")) {
-                userData.brightness = doc["brightness"].as<int>();
-            }
-            // Note: watch_face is handled by firmware defaults
-            USBSerial.println("[SD] User config loaded from SD");
-        }
-    }
-}
-
-/**
- * Save user config to SD card
- */
-void saveUserConfigToSD() {
-    if (!sdCardInitialized) return;
-    
-    File file = SD_MMC.open(SD_USER_JSON, FILE_WRITE);
-    if (file) {
-        StaticJsonDocument<512> doc;
-        doc["watch_face"] = "Minimal";  // Current face name
-        doc["brightness"] = userData.brightness;
-        doc["vibration"] = true;
-        
-        serializeJsonPretty(doc, file);
-        file.close();
-        USBSerial.println("[SD] User config saved to SD");
-        
-        // Update last backup time
-        lastBackupTimeMs = millis();
-        hasLastBackup = true;
-        
-        // Update used space
-        sdCardUsedMB = SD_MMC.usedBytes() / (1024 * 1024);
-    }
-}
-
-/**
- * Load display config from SD card
- */
-void loadDisplayConfigFromSD() {
-    if (!sdCardInitialized) return;
-    
-    File file = SD_MMC.open(SD_DISPLAY_JSON, FILE_READ);
-    if (file) {
-        StaticJsonDocument<256> doc;
-        DeserializationError error = deserializeJson(doc, file);
-        file.close();
-        
-        if (!error) {
-            if (doc.containsKey("timeout")) {
-                userData.screenTimeout = doc["timeout"].as<int>();
-            }
-            USBSerial.println("[SD] Display config loaded from SD");
-        }
-    }
-}
-
-/**
- * Load WiFi config from SD card
- */
-void loadWiFiConfigFromSD() {
-    if (!sdCardInitialized) return;
-    
-    File file = SD_MMC.open(SD_WIFI_CONFIG, FILE_READ);
-    if (!file) {
-        USBSerial.println("[SD] No WiFi config found - using defaults");
-        return;
-    }
-    
-    USBSerial.println("[SD] Loading WiFi config from SD...");
-    numWifiNetworks = 0;
-    
-    while (file.available() && numWifiNetworks < MAX_WIFI_NETWORKS) {
-        String line = file.readStringUntil('\n');
-        line.trim();
-        
-        // Skip comments and empty lines
-        if (line.length() == 0 || line.startsWith("#")) continue;
-        
-        int eqPos = line.indexOf('=');
-        if (eqPos > 0) {
-            String key = line.substring(0, eqPos);
-            String value = line.substring(eqPos + 1);
-            value.trim();
-            
-            if (key.startsWith("WIFI") && key.endsWith("_SSID")) {
-                int netNum = key.charAt(4) - '1';
-                if (netNum >= 0 && netNum < MAX_WIFI_NETWORKS) {
-                    strncpy(wifiNetworks[netNum].ssid, value.c_str(), 63);
-                    wifiNetworks[netNum].valid = true;
-                    wifiNetworks[netNum].isOpen = false;
-                    if (netNum >= numWifiNetworks) numWifiNetworks = netNum + 1;
-                }
-            } else if (key.startsWith("WIFI") && key.endsWith("_PASS")) {
-                int netNum = key.charAt(4) - '1';
-                if (netNum >= 0 && netNum < MAX_WIFI_NETWORKS) {
-                    strncpy(wifiNetworks[netNum].password, value.c_str(), 63);
-                    if (value.length() == 0) {
-                        wifiNetworks[netNum].isOpen = true;
-                    }
-                }
-            } else if (key == "CITY") {
-                strncpy(weatherCity, value.c_str(), 63);
-            } else if (key == "COUNTRY") {
-                strncpy(weatherCountry, value.c_str(), 7);
-            } else if (key == "GMT_OFFSET") {
-                gmtOffsetSec = value.toInt() * 3600;
-            }
-        }
-    }
-    
-    file.close();
-    wifiConfigFromSD = true;
-    
-    USBSerial.printf("[SD] Loaded %d WiFi networks\n", numWifiNetworks);
-    USBSerial.printf("[SD] Location: %s, %s (GMT%+ld)\n", weatherCity, weatherCountry, gmtOffsetSec/3600);
-    
-    logToBootLog("WiFi config loaded from SD");
-}
-
-/**
- * Scan for custom watch faces on SD card
- */
-void scanSDFaces() {
-    if (!sdCardInitialized) return;
-    
-    numSDFaces = 0;
-    USBSerial.println("[SD] Scanning for custom watch faces...");
-    
-    // Scan custom faces
-    File customDir = SD_MMC.open(SD_FACES_CUSTOM_PATH);
-    if (customDir && customDir.isDirectory()) {
-        File faceFolder = customDir.openNextFile();
-        while (faceFolder && numSDFaces < MAX_SD_FACES) {
-            if (faceFolder.isDirectory()) {
-                // Check for face.json
-                String facePath = String(SD_FACES_CUSTOM_PATH) + "/" + faceFolder.name() + "/face.json";
-                if (SD_MMC.exists(facePath.c_str())) {
-                    File faceJson = SD_MMC.open(facePath.c_str(), FILE_READ);
-                    if (faceJson) {
-                        StaticJsonDocument<256> doc;
-                        if (deserializeJson(doc, faceJson) == DeserializationError::Ok) {
-                            strncpy(sdFaces[numSDFaces].name, doc["name"] | faceFolder.name(), 31);
-                            strncpy(sdFaces[numSDFaces].author, doc["author"] | "Unknown", 31);
-                            strncpy(sdFaces[numSDFaces].version, doc["version"] | "1.0", 15);
-                            snprintf(sdFaces[numSDFaces].path, 63, "%s/%s", SD_FACES_CUSTOM_PATH, faceFolder.name());
-                            sdFaces[numSDFaces].valid = true;
-                            
-                            USBSerial.printf("[SD] Found face: %s by %s\n", 
-                                           sdFaces[numSDFaces].name, 
-                                           sdFaces[numSDFaces].author);
-                            numSDFaces++;
-                        }
-                        faceJson.close();
-                    }
-                }
-            }
-            faceFolder = customDir.openNextFile();
-        }
-        customDir.close();
-    }
-    
-    // Also scan imported faces
-    File importedDir = SD_MMC.open(SD_FACES_IMPORTED_PATH);
-    if (importedDir && importedDir.isDirectory()) {
-        File faceFolder = importedDir.openNextFile();
-        while (faceFolder && numSDFaces < MAX_SD_FACES) {
-            if (faceFolder.isDirectory()) {
-                String facePath = String(SD_FACES_IMPORTED_PATH) + "/" + faceFolder.name() + "/face.json";
-                if (SD_MMC.exists(facePath.c_str())) {
-                    File faceJson = SD_MMC.open(facePath.c_str(), FILE_READ);
-                    if (faceJson) {
-                        StaticJsonDocument<256> doc;
-                        if (deserializeJson(doc, faceJson) == DeserializationError::Ok) {
-                            strncpy(sdFaces[numSDFaces].name, doc["name"] | faceFolder.name(), 31);
-                            strncpy(sdFaces[numSDFaces].author, doc["author"] | "Unknown", 31);
-                            strncpy(sdFaces[numSDFaces].version, doc["version"] | "1.0", 15);
-                            snprintf(sdFaces[numSDFaces].path, 63, "%s/%s", SD_FACES_IMPORTED_PATH, faceFolder.name());
-                            sdFaces[numSDFaces].valid = true;
-                            
-                            USBSerial.printf("[SD] Found imported face: %s\n", sdFaces[numSDFaces].name);
-                            numSDFaces++;
-                        }
-                        faceJson.close();
-                    }
-                }
-            }
-            faceFolder = importedDir.openNextFile();
-        }
-        importedDir.close();
-    }
-    
-    USBSerial.printf("[SD] Total custom faces found: %d\n", numSDFaces);
-    
-    char logMsg[64];
-    snprintf(logMsg, sizeof(logMsg), "Found %d custom watch faces", numSDFaces);
-    logToBootLog(logMsg);
-}
-
-/**
- * List SD card directory contents (for debugging)
- */
-void listSDDirectory(const char* path, int depth) {
-    if (!sdCardInitialized || depth < 0) return;
-    
-    File dir = SD_MMC.open(path);
-    if (!dir || !dir.isDirectory()) return;
-    
-    File entry = dir.openNextFile();
-    while (entry) {
-        for (int i = 0; i < (3 - depth); i++) USBSerial.print("  ");
-        
-        if (entry.isDirectory()) {
-            USBSerial.printf("📁 %s/\n", entry.name());
-            if (depth > 0) {
-                String subPath = String(path) + "/" + entry.name();
-                listSDDirectory(subPath.c_str(), depth - 1);
-            }
-        } else {
-            USBSerial.printf("📄 %s (%d bytes)\n", entry.name(), entry.size());
-        }
-        entry = dir.openNextFile();
-    }
-    dir.close();
+    // Load WiFi config
+    loadWiFiConfigFromSD();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1064,165 +1007,116 @@ void listSDDirectory(const char* path, int depth) {
 // ═══════════════════════════════════════════════════════════════════════════════
 void screenOff() {
     if (!screenOn) return;
-    batteryStats.screenOnTimeMs += (millis() - screenOnStartMs);
-    screenOffStartMs = millis();
     screenOn = false;
-    gfx->setBrightness(0);
+    screenOffStartMs = millis();
+    batteryStats.screenOnTimeMs += (millis() - screenOnStartMs);
+    gfx->displayOff();
+    USBSerial.println("[POWER] Screen off");
 }
 
 void screenOnFunc() {
     if (screenOn) return;
-    batteryStats.screenOffTimeMs += (millis() - screenOffStartMs);
-    screenOnStartMs = millis();
     screenOn = true;
+    screenOnStartMs = millis();
+    batteryStats.screenOffTimeMs += (millis() - screenOffStartMs);
+    gfx->displayOn();
     lastActivityMs = millis();
-    gfx->setBrightness(batterySaverMode ? 100 : userData.brightness);
+    USBSerial.println("[POWER] Screen on");
 }
 
-void shutdownDevice() {
-    // Save user data to SD before shutdown
-    if (hasSD && sdCardInitialized) {
-        saveUserConfigToSD();
-        logToBootLog("Shutdown initiated - user data saved");
-    }
-    
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BOOT SCREEN
+// ═══════════════════════════════════════════════════════════════════════════════
+void showBootScreen() {
     lv_obj_clean(lv_scr_act());
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x000000), 0);
-
-    lv_obj_t *label = lv_label_create(lv_scr_act());
-    lv_label_set_text(label, "Shutting down...");
-    lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, 0);
-    lv_obj_center(label);
-
+    
+    lv_obj_t *title = lv_label_create(lv_scr_act());
+    lv_label_set_text(title, WIDGET_OS_NAME);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -40);
+    
+    lv_obj_t *version = lv_label_create(lv_scr_act());
+    char verBuf[32];
+    snprintf(verBuf, sizeof(verBuf), "v%s", WIDGET_OS_VERSION);
+    lv_label_set_text(version, verBuf);
+    lv_obj_set_style_text_color(version, lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_text_font(version, &lv_font_montserrat_14, 0);
+    lv_obj_align(version, LV_ALIGN_CENTER, 0, 0);
+    
+    lv_obj_t *device = lv_label_create(lv_scr_act());
+    lv_label_set_text(device, DEVICE_ID);
+    lv_obj_set_style_text_color(device, lv_color_hex(0x0A84FF), 0);
+    lv_obj_set_style_text_font(device, &lv_font_montserrat_12, 0);
+    lv_obj_align(device, LV_ALIGN_CENTER, 0, 30);
+    
+    lv_obj_t *webNote = lv_label_create(lv_scr_act());
+    lv_label_set_text(webNote, "Fusion Labs Web Ready");
+    lv_obj_set_style_text_color(webNote, lv_color_hex(0x30D158), 0);
+    lv_obj_set_style_text_font(webNote, &lv_font_montserrat_10, 0);
+    lv_obj_align(webNote, LV_ALIGN_BOTTOM_MID, 0, -20);
+    
     lv_task_handler();
-    delay(1000);
-
-    gfx->setBrightness(0);
-    if (hasPMU) power.shutdown();
-    esp_deep_sleep_start();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SETUP - Widget OS Initialization
+//  SETUP
 // ═══════════════════════════════════════════════════════════════════════════════
 void setup() {
-    // Initialize USB Serial
     USBSerial.begin(115200);
     delay(500);
     
-    USBSerial.println("\n");
-    USBSerial.println("═══════════════════════════════════════════════════════════════════");
-    USBSerial.printf("  %s %s\n", WIDGET_OS_NAME, WIDGET_OS_VERSION);
-    USBSerial.printf("  Device: %s (%s\" AMOLED)\n", DEVICE_ID, DEVICE_SCREEN);
-    USBSerial.println("═══════════════════════════════════════════════════════════════════");
-    USBSerial.println("");
+    USBSerial.println("\n═══════════════════════════════════════════════════════════════════");
+    USBSerial.println("  WIDGET OS - FUSION LABS WEB EDITION");
+    USBSerial.println("  Board: " DEVICE_ID " (" DEVICE_SCREEN "\" AMOLED)");
+    USBSerial.println("═══════════════════════════════════════════════════════════════════\n");
     
     // Initialize I2C
     Wire.begin(IIC_SDA, IIC_SCL);
-    USBSerial.println("[BOOT] I2C initialized");
     
-    // Initialize I/O expander (1.8" board specific)
-    if (!expander.begin(0x20)) {
-        USBSerial.println("[BOOT] WARNING: XCA9554 I/O expander not found");
-    } else {
-        USBSerial.println("[BOOT] I/O expander initialized");
-        expander.pinMode(7, OUTPUT);
-        expander.digitalWrite(7, HIGH);  // Enable LCD power
+    // Initialize I/O Expander (for 1.8" board)
+    if (expander.begin(0x20, &Wire)) {
+        USBSerial.println("[BOOT] I/O Expander initialized");
     }
     
     // Initialize display
-    delay(100);  // Wait for power to stabilize
-    if (!gfx->begin()) {
-        USBSerial.println("[BOOT] ERROR: Display init failed!");
-    } else {
-        USBSerial.println("[BOOT] Display initialized");
-    }
-    gfx->fillScreen(RGB565_BLACK);
-    gfx->setBrightness(200);
+    gfx->begin();
+    gfx->fillScreen(BLACK);
+    gfx->Display_Brightness(userData.brightness);
+    USBSerial.println("[BOOT] Display initialized");
     
-    // Initialize touch controller
-    int touchRetries = 0;
-    while (FT3168->begin() == false && touchRetries < 5) {
-        USBSerial.println("[BOOT] Touch init retry...");
-        delay(500);
-        touchRetries++;
-    }
-    if (touchRetries < 5) {
-        USBSerial.println("[BOOT] Touch controller initialized");
-        FT3168->IIC_Write_Device_State(FT3168->Arduino_IIC_Touch::Device::TOUCH_POWER_MODE,
-                                       FT3168->Arduino_IIC_Touch::Device_Mode::TOUCH_POWER_MONITOR);
-    } else {
-        USBSerial.println("[BOOT] WARNING: Touch init failed");
-    }
+    // Initialize touch
+    FT3168->IIC_Device_Reset();
+    FT3168->IIC_Init();
+    USBSerial.println("[BOOT] Touch initialized");
     
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  WIDGET OS - SD CARD INITIALIZATION (CRITICAL)
-    // ═══════════════════════════════════════════════════════════════════════════
-    USBSerial.println("\n[BOOT] Initializing SD card...");
-    
-    if (initWidgetOSSDCard()) {
-        USBSerial.println("[BOOT] SD card initialized successfully");
-        
-        // Load configs from SD
-        loadUserConfigFromSD();
-        loadDisplayConfigFromSD();
-        loadWiFiConfigFromSD();
-        
-        // Scan for custom faces
-        scanSDFaces();
-        
-        // List SD contents for debugging
-        USBSerial.println("\n[BOOT] SD Card Contents:");
-        listSDDirectory(SD_ROOT_PATH, 2);
-    } else {
-        USBSerial.println("[BOOT] SD card not available - using defaults");
-        // OS continues with internal defaults (as per spec)
-    }
+    // Initialize SD card
+    initSDCard();
     
     // Initialize RTC
-    if (rtc.begin()) {
+    if (rtc.begin(Wire, PCF85063_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
         hasRTC = true;
         USBSerial.println("[BOOT] RTC initialized");
-        
-        RTC_DateTime dt = rtc.getDateTime();
-        clockHour = dt.getHour();
-        clockMinute = dt.getMinute();
-        clockSecond = dt.getSecond();
-    } else {
-        USBSerial.println("[BOOT] WARNING: RTC not found");
     }
     
     // Initialize IMU
     if (qmi.begin(Wire, QMI8658_L_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
         hasIMU = true;
-        USBSerial.println("[BOOT] IMU initialized");
-        qmi.configAccelerometer(
-            SensorQMI8658::ACC_RANGE_4G,
-            SensorQMI8658::ACC_ODR_250Hz,
-            SensorQMI8658::LPF_MODE_0
-        );
-        qmi.configGyroscope(
-            SensorQMI8658::GYR_RANGE_512DPS,
-            SensorQMI8658::GYR_ODR_250Hz,
-            SensorQMI8658::LPF_MODE_3
-        );
+        qmi.configAccelerometer(SensorQMI8658::ACC_RANGE_4G, SensorQMI8658::ACC_ODR_250Hz, SensorQMI8658::LPF_MODE_3);
+        qmi.configGyroscope(SensorQMI8658::GYR_RANGE_512DPS, SensorQMI8658::GYR_ODR_250Hz, SensorQMI8658::LPF_MODE_3);
         qmi.enableAccelerometer();
         qmi.enableGyroscope();
-    } else {
-        USBSerial.println("[BOOT] WARNING: IMU not found");
+        USBSerial.println("[BOOT] IMU initialized");
     }
     
     // Initialize PMU
     if (power.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
         hasPMU = true;
-        USBSerial.println("[BOOT] PMU initialized");
         power.disableTSPinMeasure();
         power.enableBattVoltageMeasure();
         power.enableVbusVoltageMeasure();
-        power.enableSystemVoltageMeasure();
-    } else {
-        USBSerial.println("[BOOT] WARNING: PMU not found");
+        USBSerial.println("[BOOT] PMU initialized");
     }
     
     // Initialize LVGL
@@ -1230,9 +1124,7 @@ void setup() {
     
     size_t bufferSize = LCD_WIDTH * 50;
     buf1 = (lv_color_t *)heap_caps_malloc(bufferSize * sizeof(lv_color_t), MALLOC_CAP_DMA);
-    if (!buf1) {
-        buf1 = (lv_color_t *)malloc(bufferSize * sizeof(lv_color_t));
-    }
+    if (!buf1) buf1 = (lv_color_t *)malloc(bufferSize * sizeof(lv_color_t));
     
     if (buf1) {
         lv_disp_draw_buf_init(&draw_buf, buf1, NULL, bufferSize);
@@ -1244,31 +1136,16 @@ void setup() {
         disp_drv.flush_cb = my_disp_flush;
         disp_drv.draw_buf = &draw_buf;
         lv_disp_drv_register(&disp_drv);
-        
-        USBSerial.println("[BOOT] LVGL initialized");
-    } else {
-        USBSerial.println("[BOOT] ERROR: LVGL buffer allocation failed");
     }
-    
-    // Initialize touch input for LVGL
-    static lv_indev_drv_t indev_drv;
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.type = LV_INDEV_TYPE_POINTER;
-    // Note: Add touch read callback here
-    lv_indev_drv_register(&indev_drv);
-    
-    // Load preferences from SPIFFS (backup)
-    prefs.begin("watchdata", false);
     
     // Initialize timing
     lastActivityMs = millis();
     screenOnStartMs = millis();
     batteryStats.sessionStartMs = millis();
     
-    // Log boot completion
+    // Log boot
     if (hasSD && sdCardInitialized) {
-        logToBootLog("Boot completed successfully");
-        logToBootLog("═══════════════════════════════════════════════════════════════════");
+        logToBootLog("Boot completed - Fusion Labs Web Edition");
     }
     
     USBSerial.println("\n═══════════════════════════════════════════════════════════════════");
@@ -1279,470 +1156,10 @@ void setup() {
     USBSerial.printf("  IMU: %s\n", hasIMU ? "OK" : "Not found");
     USBSerial.printf("  PMU: %s\n", hasPMU ? "OK" : "Not found");
     USBSerial.printf("  Custom Faces: %d found\n", numSDFaces);
+    USBSerial.println("  Web Serial: Ready (WIDGET_PING to test)");
     USBSerial.println("═══════════════════════════════════════════════════════════════════\n");
     
-    // Show boot screen
     showBootScreen();
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  SD CARD HEALTH WIDGET (Settings Category - Card 1)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// LVGL objects for backup UI
-lv_obj_t *backupBtn = NULL;
-lv_obj_t *backupProgressBar = NULL;
-lv_obj_t *backupStatusLabel = NULL;
-lv_obj_t *sdHealthScreen = NULL;
-lv_obj_t *autoBackupSwitch = NULL;
-lv_obj_t *autoBackupLabel = NULL;
-
-/**
- * Get formatted last backup time string
- */
-String getLastBackupTimeString() {
-    if (!hasLastBackup) {
-        return "Never";
-    }
-    
-    unsigned long elapsedMs = millis() - lastBackupTimeMs;
-    unsigned long elapsedSec = elapsedMs / 1000;
-    unsigned long elapsedMin = elapsedSec / 60;
-    unsigned long elapsedHour = elapsedMin / 60;
-    
-    if (elapsedSec < 60) {
-        return "Just now";
-    } else if (elapsedMin < 60) {
-        return String(elapsedMin) + " min ago";
-    } else if (elapsedHour < 24) {
-        return String(elapsedHour) + " hr ago";
-    } else {
-        return String(elapsedHour / 24) + " day(s) ago";
-    }
-}
-
-/**
- * Get storage usage percentage
- */
-uint8_t getStorageUsagePercent() {
-    if (sdCardSizeMB == 0) return 0;
-    return (uint8_t)((sdCardUsedMB * 100) / sdCardSizeMB);
-}
-
-/**
- * Perform full backup with progress tracking
- */
-void performBackupWithProgress() {
-    if (!hasSD || !sdCardInitialized || backupInProgress) return;
-    
-    backupInProgress = true;
-    backupProgress = 0;
-    showingBackupComplete = false;
-    
-    USBSerial.println("[BACKUP] Starting backup...");
-    logToBootLog("Manual backup initiated");
-    
-    // Step 1: Save user config (40%)
-    backupProgress = 10;
-    delay(100);  // Small delay for visual feedback
-    
-    File file = SD_MMC.open(SD_USER_JSON, FILE_WRITE);
-    if (file) {
-        StaticJsonDocument<512> doc;
-        doc["watch_face"] = "Minimal";
-        doc["brightness"] = userData.brightness;
-        doc["vibration"] = true;
-        doc["step_goal"] = userData.dailyGoal;
-        doc["steps"] = userData.steps;
-        serializeJsonPretty(doc, file);
-        file.close();
-    }
-    backupProgress = 40;
-    
-    // Step 2: Save display config (60%)
-    delay(100);
-    File dispFile = SD_MMC.open(SD_DISPLAY_JSON, FILE_WRITE);
-    if (dispFile) {
-        StaticJsonDocument<256> doc;
-        doc["always_on"] = false;
-        doc["timeout"] = userData.screenTimeout;
-        doc["theme"] = userData.themeIndex;
-        serializeJsonPretty(doc, dispFile);
-        dispFile.close();
-    }
-    backupProgress = 60;
-    
-    // Step 3: Save power config (80%)
-    delay(100);
-    File pwrFile = SD_MMC.open(SD_POWER_JSON, FILE_WRITE);
-    if (pwrFile) {
-        StaticJsonDocument<256> doc;
-        doc["battery_saver_threshold"] = LOW_BATTERY_WARNING;
-        doc["auto_brightness"] = false;
-        doc["battery_saver_auto"] = batterySaverAutoEnabled;
-        serializeJsonPretty(doc, pwrFile);
-        pwrFile.close();
-    }
-    backupProgress = 80;
-    
-    // Step 4: Update stats and finalize (100%)
-    delay(100);
-    sdCardUsedMB = SD_MMC.usedBytes() / (1024 * 1024);
-    lastBackupTimeMs = millis();
-    hasLastBackup = true;
-    lastAutoBackupMs = millis();
-    
-    backupProgress = 100;
-    backupInProgress = false;
-    showingBackupComplete = true;
-    backupCompleteShownMs = millis();
-    
-    USBSerial.println("[BACKUP] Backup completed successfully!");
-    logToBootLog("Backup completed successfully");
-}
-
-/**
- * Check and perform auto backup if needed
- */
-void checkAutoBackup() {
-    if (!hasSD || !sdCardInitialized || !autoBackupEnabled) return;
-    if (backupInProgress) return;
-    
-    // Check if 24 hours have passed since last backup
-    if (millis() - lastAutoBackupMs >= AUTO_BACKUP_INTERVAL_MS) {
-        USBSerial.println("[BACKUP] Auto backup triggered (24hr interval)");
-        logToBootLog("Auto backup triggered");
-        performBackupWithProgress();
-    }
-}
-
-/**
- * Show SD Card Health Widget (Settings > SD Card Health)
- * Displays: Connection status, Storage used, Face count, Last backup, Backup button
- */
-void showSDCardHealthWidget() {
-    lv_obj_clean(lv_scr_act());
-    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x000000), 0);
-    sdHealthScreen = lv_scr_act();
-    
-    // Title
-    lv_obj_t *title = lv_label_create(lv_scr_act());
-    lv_label_set_text(title, "SD Card Health");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 15);
-    
-    // Connection Status
-    lv_obj_t *connLabel = lv_label_create(lv_scr_act());
-    char connBuf[48];
-    if (hasSD && sdCardInitialized) {
-        snprintf(connBuf, sizeof(connBuf), "● Connected (%s)", sdCardType.c_str());
-        lv_label_set_text(connLabel, connBuf);
-        lv_obj_set_style_text_color(connLabel, lv_color_hex(0x30D158), 0);
-    } else {
-        snprintf(connBuf, sizeof(connBuf), "○ %s", getSDCardStatusString());
-        lv_label_set_text(connLabel, connBuf);
-        lv_obj_set_style_text_color(connLabel, lv_color_hex(0xFF453A), 0);
-    }
-    lv_obj_set_style_text_font(connLabel, &lv_font_montserrat_12, 0);
-    lv_obj_align(connLabel, LV_ALIGN_TOP_MID, 0, 45);
-    
-    // Storage Bar Background
-    lv_obj_t *storageBarBg = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(storageBarBg, 180, 16);
-    lv_obj_set_style_bg_color(storageBarBg, lv_color_hex(0x2C2C2E), 0);
-    lv_obj_set_style_radius(storageBarBg, 8, 0);
-    lv_obj_set_style_border_width(storageBarBg, 0, 0);
-    lv_obj_set_style_pad_all(storageBarBg, 0, 0);
-    lv_obj_align(storageBarBg, LV_ALIGN_TOP_MID, 0, 70);
-    
-    // Storage Bar Fill
-    if (hasSD && sdCardSizeMB > 0) {
-        uint8_t usagePercent = getStorageUsagePercent();
-        int fillWidth = (usagePercent * 176) / 100;
-        if (fillWidth < 4) fillWidth = 4;
-        
-        lv_obj_t *storageBarFill = lv_obj_create(storageBarBg);
-        lv_obj_set_size(storageBarFill, fillWidth, 12);
-        lv_obj_set_style_radius(storageBarFill, 6, 0);
-        lv_obj_set_style_border_width(storageBarFill, 0, 0);
-        lv_obj_align(storageBarFill, LV_ALIGN_LEFT_MID, 2, 0);
-        
-        if (usagePercent < 70) {
-            lv_obj_set_style_bg_color(storageBarFill, lv_color_hex(0x30D158), 0);
-        } else if (usagePercent < 90) {
-            lv_obj_set_style_bg_color(storageBarFill, lv_color_hex(0xFF9F0A), 0);
-        } else {
-            lv_obj_set_style_bg_color(storageBarFill, lv_color_hex(0xFF453A), 0);
-        }
-    }
-    
-    // Storage Text
-    lv_obj_t *storageLabel = lv_label_create(lv_scr_act());
-    char storageBuf[48];
-    if (hasSD) {
-        snprintf(storageBuf, sizeof(storageBuf), "%llu / %llu MB (%d%%)", 
-                 sdCardUsedMB, sdCardSizeMB, getStorageUsagePercent());
-    } else {
-        snprintf(storageBuf, sizeof(storageBuf), "N/A");
-    }
-    lv_label_set_text(storageLabel, storageBuf);
-    lv_obj_set_style_text_color(storageLabel, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(storageLabel, &lv_font_montserrat_10, 0);
-    lv_obj_align(storageLabel, LV_ALIGN_TOP_MID, 0, 90);
-    
-    // Face Count
-    lv_obj_t *faceLabel = lv_label_create(lv_scr_act());
-    char faceBuf[32];
-    snprintf(faceBuf, sizeof(faceBuf), "Faces: %d", numSDFaces);
-    lv_label_set_text(faceLabel, faceBuf);
-    lv_obj_set_style_text_color(faceLabel, lv_color_hex(0x0A84FF), 0);
-    lv_obj_set_style_text_font(faceLabel, &lv_font_montserrat_12, 0);
-    lv_obj_align(faceLabel, LV_ALIGN_TOP_MID, 0, 115);
-    
-    // Last Backup
-    lv_obj_t *backupTimeLabel = lv_label_create(lv_scr_act());
-    char backupTimeBuf[48];
-    String backupTime = getLastBackupTimeString();
-    snprintf(backupTimeBuf, sizeof(backupTimeBuf), "Last Backup: %s", backupTime.c_str());
-    lv_label_set_text(backupTimeLabel, backupTimeBuf);
-    lv_obj_set_style_text_color(backupTimeLabel, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(backupTimeLabel, &lv_font_montserrat_10, 0);
-    lv_obj_align(backupTimeLabel, LV_ALIGN_TOP_MID, 0, 140);
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // AUTO BACKUP TOGGLE SWITCH
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Auto Backup Label
-    autoBackupLabel = lv_label_create(lv_scr_act());
-    lv_label_set_text(autoBackupLabel, "Auto Backup");
-    lv_obj_set_style_text_color(autoBackupLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(autoBackupLabel, &lv_font_montserrat_12, 0);
-    lv_obj_align(autoBackupLabel, LV_ALIGN_TOP_MID, -40, 165);
-    
-    // Toggle Switch
-    autoBackupSwitch = lv_switch_create(lv_scr_act());
-    lv_obj_set_size(autoBackupSwitch, 50, 26);
-    lv_obj_align(autoBackupSwitch, LV_ALIGN_TOP_MID, 50, 162);
-    
-    // Style the switch
-    lv_obj_set_style_bg_color(autoBackupSwitch, lv_color_hex(0x48484A), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(autoBackupSwitch, lv_color_hex(0x30D158), LV_PART_INDICATOR | LV_STATE_CHECKED);
-    lv_obj_set_style_bg_color(autoBackupSwitch, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
-    lv_obj_set_style_radius(autoBackupSwitch, 13, LV_PART_MAIN);
-    lv_obj_set_style_radius(autoBackupSwitch, 13, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(autoBackupSwitch, 11, LV_PART_KNOB);
-    lv_obj_set_style_pad_all(autoBackupSwitch, -2, LV_PART_KNOB);
-    
-    // Set initial state
-    if (autoBackupEnabled) {
-        lv_obj_add_state(autoBackupSwitch, LV_STATE_CHECKED);
-    } else {
-        lv_obj_clear_state(autoBackupSwitch, LV_STATE_CHECKED);
-    }
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // BACKUP NOW BUTTON
-    // ═══════════════════════════════════════════════════════════════════════════
-    backupBtn = lv_btn_create(lv_scr_act());
-    lv_obj_set_size(backupBtn, 140, 40);
-    lv_obj_align(backupBtn, LV_ALIGN_CENTER, 0, 60);
-    lv_obj_set_style_bg_color(backupBtn, lv_color_hex(0x0A84FF), 0);
-    lv_obj_set_style_radius(backupBtn, 20, 0);
-    lv_obj_set_style_shadow_width(backupBtn, 0, 0);
-    
-    lv_obj_t *btnLabel = lv_label_create(backupBtn);
-    lv_label_set_text(btnLabel, "Backup Now");
-    lv_obj_set_style_text_color(btnLabel, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(btnLabel, &lv_font_montserrat_14, 0);
-    lv_obj_center(btnLabel);
-    
-    // Disable button if no SD card
-    if (!hasSD || !sdCardInitialized) {
-        lv_obj_set_style_bg_color(backupBtn, lv_color_hex(0x48484A), 0);
-        lv_obj_add_state(backupBtn, LV_STATE_DISABLED);
-    }
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // BACKUP PROGRESS BAR (Hidden initially)
-    // ═══════════════════════════════════════════════════════════════════════════
-    backupProgressBar = lv_bar_create(lv_scr_act());
-    lv_obj_set_size(backupProgressBar, 160, 12);
-    lv_obj_align(backupProgressBar, LV_ALIGN_CENTER, 0, 110);
-    lv_bar_set_range(backupProgressBar, 0, 100);
-    lv_bar_set_value(backupProgressBar, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(backupProgressBar, lv_color_hex(0x2C2C2E), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(backupProgressBar, lv_color_hex(0x30D158), LV_PART_INDICATOR);
-    lv_obj_set_style_radius(backupProgressBar, 6, LV_PART_MAIN);
-    lv_obj_set_style_radius(backupProgressBar, 6, LV_PART_INDICATOR);
-    lv_obj_add_flag(backupProgressBar, LV_OBJ_FLAG_HIDDEN);
-    
-    // Backup Status Label
-    backupStatusLabel = lv_label_create(lv_scr_act());
-    lv_label_set_text(backupStatusLabel, "");
-    lv_obj_set_style_text_color(backupStatusLabel, lv_color_hex(0x30D158), 0);
-    lv_obj_set_style_text_font(backupStatusLabel, &lv_font_montserrat_12, 0);
-    lv_obj_align(backupStatusLabel, LV_ALIGN_CENTER, 0, 130);
-    lv_obj_add_flag(backupStatusLabel, LV_OBJ_FLAG_HIDDEN);
-    
-    // Footer
-    lv_obj_t *hintLabel = lv_label_create(lv_scr_act());
-    lv_label_set_text(hintLabel, "Settings > SD Card");
-    lv_obj_set_style_text_color(hintLabel, lv_color_hex(0x48484A), 0);
-    lv_obj_set_style_text_font(hintLabel, &lv_font_montserrat_10, 0);
-    lv_obj_align(hintLabel, LV_ALIGN_BOTTOM_MID, 0, -10);
-    
-    lv_task_handler();
-}
-
-/**
- * Start backup with visual progress (call when button pressed)
- */
-void startBackupWithUI() {
-    if (!hasSD || !sdCardInitialized || backupInProgress) return;
-    
-    // Show progress bar, hide button
-    lv_obj_add_flag(backupBtn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(backupProgressBar, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(backupStatusLabel, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(backupStatusLabel, "Backing up...");
-    
-    lv_task_handler();
-    
-    // Perform backup
-    performBackupWithProgress();
-}
-
-/**
- * Update backup progress UI (call from loop when backup in progress)
- */
-void updateBackupProgressUI() {
-    if (backupProgressBar == NULL) return;
-    
-    if (backupInProgress) {
-        lv_bar_set_value(backupProgressBar, backupProgress, LV_ANIM_ON);
-        
-        if (backupProgress < 40) {
-            lv_label_set_text(backupStatusLabel, "Saving user data...");
-        } else if (backupProgress < 60) {
-            lv_label_set_text(backupStatusLabel, "Saving display config...");
-        } else if (backupProgress < 80) {
-            lv_label_set_text(backupStatusLabel, "Saving power config...");
-        } else {
-            lv_label_set_text(backupStatusLabel, "Finalizing...");
-        }
-    }
-    
-    if (showingBackupComplete) {
-        lv_bar_set_value(backupProgressBar, 100, LV_ANIM_OFF);
-        lv_label_set_text(backupStatusLabel, "✓ Backup Complete!");
-        lv_obj_set_style_text_color(backupStatusLabel, lv_color_hex(0x30D158), 0);
-        
-        // Hide after 2 seconds and show button again
-        if (millis() - backupCompleteShownMs > 2000) {
-            showingBackupComplete = false;
-            lv_obj_add_flag(backupProgressBar, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(backupStatusLabel, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(backupBtn, LV_OBJ_FLAG_HIDDEN);
-            
-            // Refresh the widget to show updated backup time
-            showSDCardHealthWidget();
-        }
-    }
-}
-
-/**
- * Refresh SD card health data
- */
-void refreshSDCardHealth() {
-    if (hasSD && sdCardInitialized) {
-        sdCardUsedMB = SD_MMC.usedBytes() / (1024 * 1024);
-    }
-}
-
-/**
- * Handle touch on SD Health Widget (for backup button and toggle)
- */
-void handleSDHealthTouch(int16_t touchX, int16_t touchY) {
-    if (backupInProgress || showingBackupComplete) return;
-    
-    int centerX = LCD_WIDTH / 2;
-    int centerY = LCD_HEIGHT / 2;
-    
-    // Check if touch is on backup button area (center, y around 60 offset from center)
-    int btnCenterY = centerY + 60;
-    if (touchX > centerX - 70 && touchX < centerX + 70 &&
-        touchY > btnCenterY - 20 && touchY < btnCenterY + 20) {
-        startBackupWithUI();
-        return;
-    }
-    
-    // Check if touch is on auto backup toggle area (y around 165 from top)
-    int toggleY = 165;
-    int toggleX = centerX + 50;
-    if (touchX > toggleX - 30 && touchX < toggleX + 30 &&
-        touchY > toggleY - 15 && touchY < toggleY + 15) {
-        // Toggle auto backup
-        autoBackupEnabled = !autoBackupEnabled;
-        
-        // Update switch visual state
-        if (autoBackupSwitch != NULL) {
-            if (autoBackupEnabled) {
-                lv_obj_add_state(autoBackupSwitch, LV_STATE_CHECKED);
-            } else {
-                lv_obj_clear_state(autoBackupSwitch, LV_STATE_CHECKED);
-            }
-        }
-        
-        USBSerial.printf("[BACKUP] Auto backup %s\n", autoBackupEnabled ? "enabled" : "disabled");
-        logToBootLog(autoBackupEnabled ? "Auto backup enabled" : "Auto backup disabled");
-    }
-}
-
-/**
- * Show Widget OS boot screen
- */
-void showBootScreen() {
-    lv_obj_clean(lv_scr_act());
-    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x000000), 0);
-    
-    // Widget OS logo/text
-    lv_obj_t *title = lv_label_create(lv_scr_act());
-    lv_label_set_text(title, WIDGET_OS_NAME);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -40);
-    
-    // Version
-    lv_obj_t *version = lv_label_create(lv_scr_act());
-    char verBuf[32];
-    snprintf(verBuf, sizeof(verBuf), "v%s", WIDGET_OS_VERSION);
-    lv_label_set_text(version, verBuf);
-    lv_obj_set_style_text_color(version, lv_color_hex(0x8E8E93), 0);
-    lv_obj_set_style_text_font(version, &lv_font_montserrat_14, 0);
-    lv_obj_align(version, LV_ALIGN_CENTER, 0, 0);
-    
-    // Device ID
-    lv_obj_t *device = lv_label_create(lv_scr_act());
-    lv_label_set_text(device, DEVICE_ID);
-    lv_obj_set_style_text_color(device, lv_color_hex(0x0A84FF), 0);
-    lv_obj_set_style_text_font(device, &lv_font_montserrat_12, 0);
-    lv_obj_align(device, LV_ALIGN_CENTER, 0, 30);
-    
-    // SD Status
-    lv_obj_t *sdStatus = lv_label_create(lv_scr_act());
-    char sdBuf[64];
-    if (hasSD) {
-        snprintf(sdBuf, sizeof(sdBuf), "SD: %s (%llu MB)", sdCardType.c_str(), sdCardSizeMB);
-    } else {
-        snprintf(sdBuf, sizeof(sdBuf), "SD: %s", getSDCardStatusString());
-    }
-    lv_label_set_text(sdStatus, sdBuf);
-    lv_obj_set_style_text_color(sdStatus, hasSD ? lv_color_hex(0x30D158) : lv_color_hex(0xFF453A), 0);
-    lv_obj_set_style_text_font(sdStatus, &lv_font_montserrat_10, 0);
-    lv_obj_align(sdStatus, LV_ALIGN_BOTTOM_MID, 0, -20);
-    
-    lv_task_handler();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1750,6 +1167,9 @@ void showBootScreen() {
 // ═══════════════════════════════════════════════════════════════════════════════
 void loop() {
     lv_task_handler();
+    
+    // Handle web serial commands (Fusion Labs integration)
+    handleSerialConfig();
     
     // Update RTC time
     static unsigned long lastTimeUpdate = 0;
@@ -1774,21 +1194,6 @@ void loop() {
         if (!screenOn) {
             screenOnFunc();
         }
-        
-        // Get touch coordinates for SD Health widget button handling
-        if (currentCategory == CAT_SETTINGS && currentSubCard == 1) {
-            int16_t touchX = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X);
-            int16_t touchY = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y);
-            handleSDHealthTouch(touchX, touchY);
-        }
-    }
-    
-    // Auto backup check (every loop iteration, function handles timing internally)
-    checkAutoBackup();
-    
-    // Update backup progress UI if on SD Health screen
-    if (currentCategory == CAT_SETTINGS && currentSubCard == 1) {
-        updateBackupProgressUI();
     }
     
     delay(5);
