@@ -1,87 +1,87 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- *  PIN CONFIGURATION HEADER
- *  ESP32-S3-Touch-AMOLED-1.8" (Waveshare)
+ *  Widget OS - Pin Configuration
+ *  ESP32-S3-Touch-AMOLED-1.8" (WOS-180A)
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ *  This file defines all hardware pin mappings for the 1.8" AMOLED board.
+ *  Based on Waveshare ESP32-S3-Touch-AMOLED-1.8 reference design.
+ * 
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-#pragma once
+#ifndef PIN_CONFIG_H
+#define PIN_CONFIG_H
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  POWER MANAGEMENT
+//  DISPLAY - SH8601 QSPI AMOLED (1.8" 368x448)
 // ═══════════════════════════════════════════════════════════════════════════════
-#define XPOWERS_CHIP_AXP2101
+#define LCD_SDIO0       4
+#define LCD_SDIO1       5
+#define LCD_SDIO2       6
+#define LCD_SDIO3       7
+#define LCD_SCLK        11
+#define LCD_CS          12
+#define LCD_RESET       8
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  DISPLAY - SH8601 QSPI AMOLED (368x448 Rectangular)
-// ═══════════════════════════════════════════════════════════════════════════════
-#define LCD_SDIO0       4       // QSPI_SIO0
-#define LCD_SDIO1       5       // QSPI_SI1
-#define LCD_SDIO2       6       // QSPI_SI2
-#define LCD_SDIO3       7       // QSPI_SI3
-#define LCD_SCLK        11      // QSPI_SCL
-#define LCD_CS          12      // LCD_CS
-#define LCD_RESET       8       // LCD_RESET
-
+// Display dimensions
 #define LCD_WIDTH       368
 #define LCD_HEIGHT      448
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  I2C BUS (Shared: Touch, IMU, RTC, PMU)
+//  I2C BUS
 // ═══════════════════════════════════════════════════════════════════════════════
 #define IIC_SDA         15
 #define IIC_SCL         14
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  TOUCH - FT3168
+//  TOUCH CONTROLLER - FT3168
 // ═══════════════════════════════════════════════════════════════════════════════
-#define TP_INT          38      // Touch Interrupt
-#define TP_RESET        9       // Touch Reset
-
-// I2C Address (default)
+#define TP_INT          38
+#define TP_RESET        9
 #define FT3168_DEVICE_ADDRESS   0x38
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  IMU - QMI8658 (6-Axis Accelerometer + Gyroscope)
+//  IMU - QMI8658
 // ═══════════════════════════════════════════════════════════════════════════════
-#define IMU_INT         21      // IMU Interrupt
-
-// I2C Addresses
+#define IMU_INT         21
 #define QMI8658_L_SLAVE_ADDRESS 0x6B
-#define QMI8658_H_SLAVE_ADDRESS 0x6A
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  RTC - PCF85063
 // ═══════════════════════════════════════════════════════════════════════════════
-#define RTC_INT         39      // RTC Interrupt
-
-// I2C Address
-#define PCF85063_SLAVE_ADDRESS  0x51
+#define RTC_INT         39
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  PMU - AXP2101 (Power Management)
+//  PMU - AXP2101
 // ═══════════════════════════════════════════════════════════════════════════════
-// Uses shared I2C bus (IIC_SDA, IIC_SCL)
 #define AXP2101_SLAVE_ADDRESS   0x34
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SD CARD (SDMMC Mode)
+//  SD CARD - SD_MMC 1-bit Mode
+//  Reference: Waveshare ESP32-S3-Touch-AMOLED-1.8 SD Test Example
 // ═══════════════════════════════════════════════════════════════════════════════
-#define SDMMC_CLK       2       // SD_SCK
-#define SDMMC_CMD       1       // SD_MOSI
-#define SDMMC_DATA      3       // SD_MISO
+#define SDMMC_CLK       2
+#define SDMMC_CMD       1
+#define SDMMC_DATA      3
 
-// For compatibility with SD_MMC library
-constexpr int SD_CLK  = SDMMC_CLK;
-constexpr int SD_MOSI = SDMMC_CMD;
-constexpr int SD_MISO = SDMMC_DATA;
+// Compatibility aliases for legacy code
+#define SD_CLK          SDMMC_CLK
+#define SD_MOSI         SDMMC_CMD
+#define SD_MISO         SDMMC_DATA
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SYSTEM BUTTONS
 // ═══════════════════════════════════════════════════════════════════════════════
-#define BOOT_BUTTON     0       // Boot/Flash button (GPIO0)
+#define BOOT_BUTTON     0
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  LVGL BUFFER SIZE (for memory allocation)
+//  DISPLAY COLOR MACROS
 // ═══════════════════════════════════════════════════════════════════════════════
-#define LVGL_BUFFER_LINES   50
+#define RGB565_BLACK    0x0000
+#define RGB565_WHITE    0xFFFF
+#define RGB565_RED      0xF800
+#define RGB565_GREEN    0x07E0
+#define RGB565_BLUE     0x001F
+
+#endif // PIN_CONFIG_H
