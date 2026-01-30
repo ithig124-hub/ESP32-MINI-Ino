@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- *  PIN CONFIGURATION HEADER
+ *  PIN CONFIGURATION HEADER - Widget OS
  *  ESP32-S3-Touch-AMOLED-2.06" (Waveshare)
  *  
  *  IMPORTANT: This is for the 2.06" display, NOT the 1.8" display!
@@ -77,7 +77,7 @@
 #define AXP2101_SLAVE_ADDRESS   0x34
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SD CARD (SDMMC Mode)
+//  SD CARD (SDMMC Mode) - Widget OS Storage
 // ═══════════════════════════════════════════════════════════════════════════════
 #define SDMMC_CLK       2       // SD_SCK
 #define SDMMC_CMD       1       // SD_MOSI
