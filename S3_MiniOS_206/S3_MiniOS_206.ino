@@ -135,7 +135,19 @@ bool sdCardInitialized = false;
 bool sdStructureCreated = false;
 String sdErrorMessage = "";
 uint64_t sdCardSizeMB = 0;
+uint64_t sdCardUsedMB = 0;
 String sdCardType = "Unknown";
+unsigned long lastBackupTimeMs = 0;
+bool hasLastBackup = false;
+
+// Auto backup configuration
+#define AUTO_BACKUP_INTERVAL_MS 86400000UL  // 24 hours in milliseconds
+unsigned long lastAutoBackupMs = 0;
+bool autoBackupEnabled = true;
+bool backupInProgress = false;
+uint8_t backupProgress = 0;
+bool showingBackupComplete = false;
+unsigned long backupCompleteShownMs = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  USB SERIAL COMPATIBILITY FIX
@@ -258,7 +270,7 @@ enum Category {
 
 int currentCategory = CAT_CLOCK;
 int currentSubCard = 0;
-const int maxSubCards[] = {5, 3, 4, 3, 2, 2, 2, 4, 3, 1, 2, 4, 1, 3, 2};
+const int maxSubCards[] = {5, 3, 4, 3, 2, 2, 2, 4, 3, 1, 2, 4, 2, 3, 2};  // Settings now has 2 cards (General + SD Health)
 
 bool isTransitioning = false;
 int transitionDir = 0;
@@ -814,11 +826,12 @@ bool initWidgetOSSDCard() {
     }
     
     sdCardSizeMB = SD_MMC.cardSize() / (1024 * 1024);
+    sdCardUsedMB = SD_MMC.usedBytes() / (1024 * 1024);
     
     USBSerial.printf("[SD] Card Type: %s\n", sdCardType.c_str());
     USBSerial.printf("[SD] Card Size: %llu MB\n", sdCardSizeMB);
     USBSerial.printf("[SD] Total Space: %llu MB\n", SD_MMC.totalBytes() / (1024 * 1024));
-    USBSerial.printf("[SD] Used Space: %llu MB\n", SD_MMC.usedBytes() / (1024 * 1024));
+    USBSerial.printf("[SD] Used Space: %llu MB\n", sdCardUsedMB);
     
     sdCardInitialized = true;
     hasSD = true;
@@ -915,6 +928,13 @@ void saveUserConfigToSD() {
         serializeJsonPretty(doc, file);
         file.close();
         USBSerial.println("[SD] Saved user config to user.json");
+        
+        // Update last backup time
+        lastBackupTimeMs = millis();
+        hasLastBackup = true;
+        
+        // Update used space
+        sdCardUsedMB = SD_MMC.usedBytes() / (1024 * 1024);
     }
 }
 
@@ -1398,6 +1418,420 @@ void setup() {
     showBootScreen();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SD CARD HEALTH WIDGET (Settings Category - Card 1)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// LVGL objects for backup UI
+lv_obj_t *backupBtn = NULL;
+lv_obj_t *backupProgressBar = NULL;
+lv_obj_t *backupStatusLabel = NULL;
+lv_obj_t *sdHealthScreen = NULL;
+lv_obj_t *autoBackupSwitch = NULL;
+lv_obj_t *autoBackupLabel = NULL;
+
+/**
+ * Get formatted last backup time string
+ */
+String getLastBackupTimeString() {
+    if (!hasLastBackup) {
+        return "Never";
+    }
+    
+    unsigned long elapsedMs = millis() - lastBackupTimeMs;
+    unsigned long elapsedSec = elapsedMs / 1000;
+    unsigned long elapsedMin = elapsedSec / 60;
+    unsigned long elapsedHour = elapsedMin / 60;
+    
+    if (elapsedSec < 60) {
+        return "Just now";
+    } else if (elapsedMin < 60) {
+        return String(elapsedMin) + " min ago";
+    } else if (elapsedHour < 24) {
+        return String(elapsedHour) + " hr ago";
+    } else {
+        return String(elapsedHour / 24) + " day(s) ago";
+    }
+}
+
+/**
+ * Get storage usage percentage
+ */
+uint8_t getStorageUsagePercent() {
+    if (sdCardSizeMB == 0) return 0;
+    return (uint8_t)((sdCardUsedMB * 100) / sdCardSizeMB);
+}
+
+/**
+ * Perform full backup with progress tracking
+ */
+void performBackupWithProgress() {
+    if (!hasSD || !sdCardInitialized || backupInProgress) return;
+    
+    backupInProgress = true;
+    backupProgress = 0;
+    showingBackupComplete = false;
+    
+    USBSerial.println("[BACKUP] Starting backup...");
+    logToBootLog("Manual backup initiated");
+    
+    // Step 1: Save user config (40%)
+    backupProgress = 10;
+    delay(100);
+    
+    File file = SD_MMC.open(SD_USER_JSON, FILE_WRITE);
+    if (file) {
+        StaticJsonDocument<512> doc;
+        doc["watch_face"] = "MinimalDark";
+        doc["brightness"] = userData.brightness;
+        doc["vibration"] = true;
+        doc["step_goal"] = userData.dailyGoal;
+        doc["steps"] = userData.steps;
+        serializeJsonPretty(doc, file);
+        file.close();
+    }
+    backupProgress = 40;
+    
+    // Step 2: Save display config (60%)
+    delay(100);
+    File dispFile = SD_MMC.open(SD_DISPLAY_JSON, FILE_WRITE);
+    if (dispFile) {
+        StaticJsonDocument<256> doc;
+        doc["always_on"] = false;
+        doc["timeout"] = userData.screenTimeout;
+        doc["theme"] = userData.themeIndex;
+        serializeJsonPretty(doc, dispFile);
+        dispFile.close();
+    }
+    backupProgress = 60;
+    
+    // Step 3: Save power config (80%)
+    delay(100);
+    File pwrFile = SD_MMC.open(SD_POWER_JSON, FILE_WRITE);
+    if (pwrFile) {
+        StaticJsonDocument<256> doc;
+        doc["battery_saver_threshold"] = LOW_BATTERY_WARNING;
+        doc["auto_brightness"] = false;
+        doc["battery_saver_auto"] = batterySaverAutoEnabled;
+        serializeJsonPretty(doc, pwrFile);
+        pwrFile.close();
+    }
+    backupProgress = 80;
+    
+    // Step 4: Update stats and finalize (100%)
+    delay(100);
+    sdCardUsedMB = SD_MMC.usedBytes() / (1024 * 1024);
+    lastBackupTimeMs = millis();
+    hasLastBackup = true;
+    lastAutoBackupMs = millis();
+    
+    backupProgress = 100;
+    backupInProgress = false;
+    showingBackupComplete = true;
+    backupCompleteShownMs = millis();
+    
+    USBSerial.println("[BACKUP] Backup completed successfully!");
+    logToBootLog("Backup completed successfully");
+}
+
+/**
+ * Check and perform auto backup if needed
+ */
+void checkAutoBackup() {
+    if (!hasSD || !sdCardInitialized || !autoBackupEnabled) return;
+    if (backupInProgress) return;
+    
+    // Check if 24 hours have passed since last backup
+    if (millis() - lastAutoBackupMs >= AUTO_BACKUP_INTERVAL_MS) {
+        USBSerial.println("[BACKUP] Auto backup triggered (24hr interval)");
+        logToBootLog("Auto backup triggered");
+        performBackupWithProgress();
+    }
+}
+
+/**
+ * Show SD Card Health Widget (Settings > SD Card Health)
+ * Displays: Connection status, Storage used, Face count, Last backup, Backup button
+ */
+void showSDCardHealthWidget() {
+    lv_obj_clean(lv_scr_act());
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x000000), 0);
+    sdHealthScreen = lv_scr_act();
+    
+    // Title
+    lv_obj_t *title = lv_label_create(lv_scr_act());
+    lv_label_set_text(title, "SD Card Health");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+    
+    // Connection Status
+    lv_obj_t *connLabel = lv_label_create(lv_scr_act());
+    char connBuf[48];
+    if (hasSD && sdCardInitialized) {
+        snprintf(connBuf, sizeof(connBuf), "● Connected (%s)", sdCardType.c_str());
+        lv_label_set_text(connLabel, connBuf);
+        lv_obj_set_style_text_color(connLabel, lv_color_hex(0x30D158), 0);
+    } else {
+        snprintf(connBuf, sizeof(connBuf), "○ %s", getSDCardStatusString());
+        lv_label_set_text(connLabel, connBuf);
+        lv_obj_set_style_text_color(connLabel, lv_color_hex(0xFF453A), 0);
+    }
+    lv_obj_set_style_text_font(connLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(connLabel, LV_ALIGN_TOP_MID, 0, 55);
+    
+    // Storage Bar Background
+    lv_obj_t *storageBarBg = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(storageBarBg, 200, 18);
+    lv_obj_set_style_bg_color(storageBarBg, lv_color_hex(0x2C2C2E), 0);
+    lv_obj_set_style_radius(storageBarBg, 9, 0);
+    lv_obj_set_style_border_width(storageBarBg, 0, 0);
+    lv_obj_set_style_pad_all(storageBarBg, 0, 0);
+    lv_obj_align(storageBarBg, LV_ALIGN_TOP_MID, 0, 85);
+    
+    // Storage Bar Fill
+    if (hasSD && sdCardSizeMB > 0) {
+        uint8_t usagePercent = getStorageUsagePercent();
+        int fillWidth = (usagePercent * 196) / 100;
+        if (fillWidth < 4) fillWidth = 4;
+        
+        lv_obj_t *storageBarFill = lv_obj_create(storageBarBg);
+        lv_obj_set_size(storageBarFill, fillWidth, 14);
+        lv_obj_set_style_radius(storageBarFill, 7, 0);
+        lv_obj_set_style_border_width(storageBarFill, 0, 0);
+        lv_obj_align(storageBarFill, LV_ALIGN_LEFT_MID, 2, 0);
+        
+        if (usagePercent < 70) {
+            lv_obj_set_style_bg_color(storageBarFill, lv_color_hex(0x30D158), 0);
+        } else if (usagePercent < 90) {
+            lv_obj_set_style_bg_color(storageBarFill, lv_color_hex(0xFF9F0A), 0);
+        } else {
+            lv_obj_set_style_bg_color(storageBarFill, lv_color_hex(0xFF453A), 0);
+        }
+    }
+    
+    // Storage Text
+    lv_obj_t *storageLabel = lv_label_create(lv_scr_act());
+    char storageBuf[48];
+    if (hasSD) {
+        snprintf(storageBuf, sizeof(storageBuf), "%llu / %llu MB (%d%%)", 
+                 sdCardUsedMB, sdCardSizeMB, getStorageUsagePercent());
+    } else {
+        snprintf(storageBuf, sizeof(storageBuf), "N/A");
+    }
+    lv_label_set_text(storageLabel, storageBuf);
+    lv_obj_set_style_text_color(storageLabel, lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_text_font(storageLabel, &lv_font_montserrat_10, 0);
+    lv_obj_align(storageLabel, LV_ALIGN_TOP_MID, 0, 108);
+    
+    // Face Count
+    lv_obj_t *faceLabel = lv_label_create(lv_scr_act());
+    char faceBuf[32];
+    snprintf(faceBuf, sizeof(faceBuf), "Faces: %d", numSDFaces);
+    lv_label_set_text(faceLabel, faceBuf);
+    lv_obj_set_style_text_color(faceLabel, lv_color_hex(0x0A84FF), 0);
+    lv_obj_set_style_text_font(faceLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(faceLabel, LV_ALIGN_TOP_MID, 0, 135);
+    
+    // Last Backup
+    lv_obj_t *backupTimeLabel = lv_label_create(lv_scr_act());
+    char backupTimeBuf[48];
+    String backupTime = getLastBackupTimeString();
+    snprintf(backupTimeBuf, sizeof(backupTimeBuf), "Last Backup: %s", backupTime.c_str());
+    lv_label_set_text(backupTimeLabel, backupTimeBuf);
+    lv_obj_set_style_text_color(backupTimeLabel, lv_color_hex(0x8E8E93), 0);
+    lv_obj_set_style_text_font(backupTimeLabel, &lv_font_montserrat_10, 0);
+    lv_obj_align(backupTimeLabel, LV_ALIGN_TOP_MID, 0, 160);
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AUTO BACKUP TOGGLE SWITCH
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Auto Backup Label
+    autoBackupLabel = lv_label_create(lv_scr_act());
+    lv_label_set_text(autoBackupLabel, "Auto Backup");
+    lv_obj_set_style_text_color(autoBackupLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(autoBackupLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(autoBackupLabel, LV_ALIGN_TOP_MID, -45, 190);
+    
+    // Toggle Switch
+    autoBackupSwitch = lv_switch_create(lv_scr_act());
+    lv_obj_set_size(autoBackupSwitch, 50, 26);
+    lv_obj_align(autoBackupSwitch, LV_ALIGN_TOP_MID, 55, 187);
+    
+    // Style the switch
+    lv_obj_set_style_bg_color(autoBackupSwitch, lv_color_hex(0x48484A), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(autoBackupSwitch, lv_color_hex(0x30D158), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(autoBackupSwitch, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+    lv_obj_set_style_radius(autoBackupSwitch, 13, LV_PART_MAIN);
+    lv_obj_set_style_radius(autoBackupSwitch, 13, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(autoBackupSwitch, 11, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(autoBackupSwitch, -2, LV_PART_KNOB);
+    
+    // Set initial state
+    if (autoBackupEnabled) {
+        lv_obj_add_state(autoBackupSwitch, LV_STATE_CHECKED);
+    } else {
+        lv_obj_clear_state(autoBackupSwitch, LV_STATE_CHECKED);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BACKUP NOW BUTTON
+    // ═══════════════════════════════════════════════════════════════════════════
+    backupBtn = lv_btn_create(lv_scr_act());
+    lv_obj_set_size(backupBtn, 160, 44);
+    lv_obj_align(backupBtn, LV_ALIGN_CENTER, 0, 85);
+    lv_obj_set_style_bg_color(backupBtn, lv_color_hex(0x0A84FF), 0);
+    lv_obj_set_style_radius(backupBtn, 22, 0);
+    lv_obj_set_style_shadow_width(backupBtn, 0, 0);
+    
+    lv_obj_t *btnLabel = lv_label_create(backupBtn);
+    lv_label_set_text(btnLabel, "Backup Now");
+    lv_obj_set_style_text_color(btnLabel, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(btnLabel, &lv_font_montserrat_14, 0);
+    lv_obj_center(btnLabel);
+    
+    // Disable button if no SD card
+    if (!hasSD || !sdCardInitialized) {
+        lv_obj_set_style_bg_color(backupBtn, lv_color_hex(0x48484A), 0);
+        lv_obj_add_state(backupBtn, LV_STATE_DISABLED);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BACKUP PROGRESS BAR (Hidden initially)
+    // ═══════════════════════════════════════════════════════════════════════════
+    backupProgressBar = lv_bar_create(lv_scr_act());
+    lv_obj_set_size(backupProgressBar, 180, 14);
+    lv_obj_align(backupProgressBar, LV_ALIGN_CENTER, 0, 140);
+    lv_bar_set_range(backupProgressBar, 0, 100);
+    lv_bar_set_value(backupProgressBar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(backupProgressBar, lv_color_hex(0x2C2C2E), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(backupProgressBar, lv_color_hex(0x30D158), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(backupProgressBar, 7, LV_PART_MAIN);
+    lv_obj_set_style_radius(backupProgressBar, 7, LV_PART_INDICATOR);
+    lv_obj_add_flag(backupProgressBar, LV_OBJ_FLAG_HIDDEN);
+    
+    // Backup Status Label
+    backupStatusLabel = lv_label_create(lv_scr_act());
+    lv_label_set_text(backupStatusLabel, "");
+    lv_obj_set_style_text_color(backupStatusLabel, lv_color_hex(0x30D158), 0);
+    lv_obj_set_style_text_font(backupStatusLabel, &lv_font_montserrat_12, 0);
+    lv_obj_align(backupStatusLabel, LV_ALIGN_CENTER, 0, 165);
+    lv_obj_add_flag(backupStatusLabel, LV_OBJ_FLAG_HIDDEN);
+    
+    // Footer
+    lv_obj_t *hintLabel = lv_label_create(lv_scr_act());
+    lv_label_set_text(hintLabel, "Settings > SD Card");
+    lv_obj_set_style_text_color(hintLabel, lv_color_hex(0x48484A), 0);
+    lv_obj_set_style_text_font(hintLabel, &lv_font_montserrat_10, 0);
+    lv_obj_align(hintLabel, LV_ALIGN_BOTTOM_MID, 0, -15);
+    
+    lv_task_handler();
+}
+
+/**
+ * Start backup with visual progress (call when button pressed)
+ */
+void startBackupWithUI() {
+    if (!hasSD || !sdCardInitialized || backupInProgress) return;
+    
+    // Show progress bar, hide button
+    lv_obj_add_flag(backupBtn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(backupProgressBar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(backupStatusLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(backupStatusLabel, "Backing up...");
+    
+    lv_task_handler();
+    
+    // Perform backup
+    performBackupWithProgress();
+}
+
+/**
+ * Update backup progress UI (call from loop when backup in progress)
+ */
+void updateBackupProgressUI() {
+    if (backupProgressBar == NULL) return;
+    
+    if (backupInProgress) {
+        lv_bar_set_value(backupProgressBar, backupProgress, LV_ANIM_ON);
+        
+        if (backupProgress < 40) {
+            lv_label_set_text(backupStatusLabel, "Saving user data...");
+        } else if (backupProgress < 60) {
+            lv_label_set_text(backupStatusLabel, "Saving display config...");
+        } else if (backupProgress < 80) {
+            lv_label_set_text(backupStatusLabel, "Saving power config...");
+        } else {
+            lv_label_set_text(backupStatusLabel, "Finalizing...");
+        }
+    }
+    
+    if (showingBackupComplete) {
+        lv_bar_set_value(backupProgressBar, 100, LV_ANIM_OFF);
+        lv_label_set_text(backupStatusLabel, "✓ Backup Complete!");
+        lv_obj_set_style_text_color(backupStatusLabel, lv_color_hex(0x30D158), 0);
+        
+        // Hide after 2 seconds and show button again
+        if (millis() - backupCompleteShownMs > 2000) {
+            showingBackupComplete = false;
+            lv_obj_add_flag(backupProgressBar, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(backupStatusLabel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(backupBtn, LV_OBJ_FLAG_HIDDEN);
+            
+            // Refresh the widget to show updated backup time
+            showSDCardHealthWidget();
+        }
+    }
+}
+
+/**
+ * Refresh SD card health data
+ */
+void refreshSDCardHealth() {
+    if (hasSD && sdCardInitialized) {
+        sdCardUsedMB = SD_MMC.usedBytes() / (1024 * 1024);
+    }
+}
+
+/**
+ * Handle touch on SD Health Widget (for backup button and toggle)
+ */
+void handleSDHealthTouch(int16_t touchX, int16_t touchY) {
+    if (backupInProgress || showingBackupComplete) return;
+    
+    int centerX = LCD_WIDTH / 2;
+    int centerY = LCD_HEIGHT / 2;
+    
+    // Check if touch is on backup button area (center, y around 85 offset from center)
+    int btnCenterY = centerY + 85;
+    if (touchX > centerX - 80 && touchX < centerX + 80 &&
+        touchY > btnCenterY - 22 && touchY < btnCenterY + 22) {
+        startBackupWithUI();
+        return;
+    }
+    
+    // Check if touch is on auto backup toggle area (y around 190 from top)
+    int toggleY = 190;
+    int toggleX = centerX + 55;
+    if (touchX > toggleX - 30 && touchX < toggleX + 30 &&
+        touchY > toggleY - 15 && touchY < toggleY + 15) {
+        // Toggle auto backup
+        autoBackupEnabled = !autoBackupEnabled;
+        
+        // Update switch visual state
+        if (autoBackupSwitch != NULL) {
+            if (autoBackupEnabled) {
+                lv_obj_add_state(autoBackupSwitch, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(autoBackupSwitch, LV_STATE_CHECKED);
+            }
+        }
+        
+        USBSerial.printf("[BACKUP] Auto backup %s\n", autoBackupEnabled ? "enabled" : "disabled");
+        logToBootLog(autoBackupEnabled ? "Auto backup enabled" : "Auto backup disabled");
+    }
+}
+
 /**
  * Show Widget OS boot screen
  */
@@ -1473,6 +1907,21 @@ void loop() {
         if (!screenOn) {
             screenOnFunc();
         }
+        
+        // Get touch coordinates for SD Health widget button handling
+        if (currentCategory == CAT_SETTINGS && currentSubCard == 1) {
+            int16_t touchX = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X);
+            int16_t touchY = FT3168->IIC_Read_Device_Value(FT3168->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y);
+            handleSDHealthTouch(touchX, touchY);
+        }
+    }
+    
+    // Auto backup check (every loop iteration, function handles timing internally)
+    checkAutoBackup();
+    
+    // Update backup progress UI if on SD Health screen
+    if (currentCategory == CAT_SETTINGS && currentSubCard == 1) {
+        updateBackupProgressUI();
     }
     
     delay(5);
